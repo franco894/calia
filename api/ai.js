@@ -3,17 +3,38 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { provider, apiKey, prompt, imageData, enableSearch } = req.body;
-  if (!apiKey) {
-    return res.status(400).json({ error: 'API Key es requerida' });
+  const { provider, apiKey, prompt, imageData, mimeType, enableSearch } = req.body;
+  const resolveApiKey = (targetProvider, explicitKey = '') => {
+    const trimmed = typeof explicitKey === 'string' ? explicitKey.trim() : '';
+    if (trimmed) return trimmed;
+
+    if (targetProvider === 'gemini') {
+      return process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
+    }
+    if (targetProvider === 'openai') {
+      return process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY || '';
+    }
+    if (targetProvider === 'claude') {
+      return process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.VITE_CLAUDE_API_KEY || '';
+    }
+    return '';
+  };
+
+  const resolvedApiKey = resolveApiKey(provider, apiKey);
+  if (!resolvedApiKey) {
+    return res.status(400).json({ error: 'No hay una API Key disponible para este proveedor.' });
   }
+
+  const safeMimeType = typeof mimeType === 'string' && mimeType.startsWith('image/')
+    ? mimeType
+    : 'image/jpeg';
 
   try {
     if (provider === 'openai') {
       const messagesContent = imageData 
         ? [
             { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageData}` } }
+            { type: 'image_url', image_url: { url: `data:${safeMimeType};base64,${imageData}` } }
           ]
         : [{ type: 'text', text: prompt }];
 
@@ -21,7 +42,7 @@ export default async function handler(req, res) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
+          'Authorization': `Bearer ${resolvedApiKey}`
         },
         body: JSON.stringify({
           model: 'gpt-4o-mini',
@@ -37,7 +58,7 @@ export default async function handler(req, res) {
     if (provider === 'claude') {
       const messagesContent = imageData
         ? [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageData } },
+            { type: 'image', source: { type: 'base64', media_type: safeMimeType, data: imageData } },
             { type: 'text', text: prompt }
           ]
         : [{ type: 'text', text: prompt }];
@@ -46,7 +67,7 @@ export default async function handler(req, res) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
+          'x-api-key': resolvedApiKey,
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
@@ -64,7 +85,7 @@ export default async function handler(req, res) {
     const parts = imageData 
       ? [
           { text: prompt },
-          { inline_data: { mime_type: 'image/jpeg', data: imageData } }
+          { inline_data: { mime_type: safeMimeType, data: imageData } }
         ]
       : [{ text: prompt }];
 
@@ -77,7 +98,7 @@ export default async function handler(req, res) {
       reqBody.tools = [{ google_search: {} }];
     }
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${resolvedApiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(reqBody)

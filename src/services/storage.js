@@ -8,6 +8,16 @@ class StorageService {
     this._runningMigrations = false;
   }
 
+  _buildFrancoSystemKey() {
+    return {
+      id: 'franco_system_gemini',
+      name: 'Gemini Sistema',
+      provider: 'gemini',
+      key: '',
+      isServerManaged: true
+    };
+  }
+
   /** Get key namespaced to current user */
   _key(name) {
     const userId = auth.getCurrentUserId();
@@ -54,6 +64,54 @@ class StorageService {
       this._set('food_entries', []);
     }
     this.runDataMigrations();
+  }
+
+  async syncServerManagedAiProfile() {
+    const userId = auth.getCurrentUserId();
+    if (userId !== 'franco') return;
+
+    let serverKeyAvailable = false;
+    try {
+      const res = await fetch('/api/validate-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'gemini' })
+      });
+      const data = await res.json();
+      serverKeyAvailable = Boolean(data && data.valid);
+    } catch (err) {
+      serverKeyAvailable = false;
+    }
+
+    const settings = this._get('settings') || {};
+    const apiKeys = Array.isArray(settings.apiKeys) ? [...settings.apiKeys] : [];
+    const systemIdx = apiKeys.findIndex(k => k.id === 'franco_system_gemini');
+    let settingsChanged = false;
+
+    if (serverKeyAvailable) {
+      if (systemIdx === -1) {
+        apiKeys.unshift(this._buildFrancoSystemKey());
+        settings.apiKeys = apiKeys;
+        if (!settings.activeApiKeyId) {
+          settings.activeApiKeyId = 'franco_system_gemini';
+          settings.aiProvider = 'gemini';
+        }
+        settingsChanged = true;
+      }
+    } else if (systemIdx !== -1) {
+      apiKeys.splice(systemIdx, 1);
+      settings.apiKeys = apiKeys;
+
+      if (settings.activeApiKeyId === 'franco_system_gemini') {
+        settings.activeApiKeyId = apiKeys[0]?.id || null;
+        settings.aiProvider = apiKeys[0]?.provider || settings.aiProvider;
+      }
+      settingsChanged = true;
+    }
+
+    if (settingsChanged) {
+      this._set('settings', settings);
+    }
   }
 
   /** Seed Franco's data (pre-built plan from 5Componentes) */
@@ -414,20 +472,41 @@ class StorageService {
 
   getSettings() {
     const settings = this._get('settings') || {};
+    let settingsChanged = false;
+
+    if (typeof settings.lightTheme !== 'boolean') {
+      settings.lightTheme = true;
+      settingsChanged = true;
+    }
     
-    // Auto initialize system API key profile for Franco if he has no key config at all
+    // Normalize Franco's server-managed AI profile if it exists
     const userId = auth.getCurrentUserId();
     if (userId === 'franco') {
-      if (!settings.apiKeys || settings.apiKeys.length === 0) {
-        settings.apiKeys = [{
-          id: 'franco_system_gemini',
-          name: 'Gemini Sistema',
-          provider: 'gemini',
-          key: import.meta.env.VITE_GEMINI_API_KEY || ''
-        }];
-        settings.activeApiKeyId = 'franco_system_gemini';
-        settings.aiProvider = 'gemini';
-        this._set('settings', settings);
+      if (Array.isArray(settings.apiKeys) && settings.apiKeys.length > 0) {
+        const systemIdx = settings.apiKeys.findIndex(k => k.id === 'franco_system_gemini');
+        const legacyManagedIdx = settings.apiKeys.findIndex(k => (
+          k.id === 'gemini_default'
+          && k.provider === 'gemini'
+          && (k.name || '') === 'Gemini Principal'
+        ));
+
+        if (legacyManagedIdx !== -1 && settings.apiKeys.length === 1) {
+          settings.apiKeys = [this._buildFrancoSystemKey()];
+          settings.activeApiKeyId = 'franco_system_gemini';
+          settings.aiProvider = 'gemini';
+          settingsChanged = true;
+        }
+
+        if (systemIdx !== -1) {
+          const systemKey = settings.apiKeys[systemIdx] || {};
+          if (systemKey.key || !systemKey.isServerManaged) {
+            settings.apiKeys[systemIdx] = {
+              ...systemKey,
+              ...this._buildFrancoSystemKey()
+            };
+            settingsChanged = true;
+          }
+        }
       }
     }
 
@@ -465,8 +544,13 @@ class StorageService {
       } else if (settings.apiKeys.length > 0) {
         settings.activeApiKeyId = settings.apiKeys[0].id;
       }
+      settingsChanged = true;
+    }
+
+    if (settingsChanged) {
       this._set('settings', settings);
     }
+
     return settings;
   }
 
@@ -541,7 +625,17 @@ class StorageService {
   getActiveApiKeyInfo() {
     const settings = this.getSettings();
     if (!settings.apiKeys || settings.apiKeys.length === 0) return null;
-    return settings.apiKeys.find(k => k.id === settings.activeApiKeyId) || settings.apiKeys[0];
+    const active = settings.apiKeys.find(k => k.id === settings.activeApiKeyId) || settings.apiKeys[0];
+    if (!active) return null;
+    return {
+      ...active,
+      isServerManaged: Boolean(active.isServerManaged)
+    };
+  }
+
+  hasActiveAiAccess() {
+    const active = this.getActiveApiKeyInfo();
+    return Boolean(active && (active.isServerManaged || active.key));
   }
 
   // ===== WATER TRACKING =====

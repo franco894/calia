@@ -6,7 +6,7 @@ import { showFoodConfirmModal } from '../components/food-confirm-modal.js';
 import { auth } from '../services/auth.js';
 import { openPlanSlotRecommenderModal } from '../components/plan-slot-recommender-modal.js';
 import { openWaterPhotoModal } from '../components/water-photo-modal.js';
-import { today, formatDate, showToast } from '../utils/helpers.js';
+import { today, formatDate, showToast, bindZoomableImages, prepareImageUpload, toFriendlyImageError } from '../utils/helpers.js';
 
 export function renderDashboard(container, { navigateTo, selectedDate }) {
   const dateStr = selectedDate || today();
@@ -56,25 +56,25 @@ export function renderDashboard(container, { navigateTo, selectedDate }) {
       </div>
 
       <!-- Date Navigator Bar -->
-      <div class="dashboard-date-navigator" style="display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);padding:8px 16px;border-radius:20px;margin-bottom:16px;">
-        <button class="btn btn-ghost" id="nav-date-prev" style="padding:6px 12px;font-size:16px;color:var(--text-secondary);">◀</button>
-        <div style="position:relative;display:flex;align-items:center;gap:8px;cursor:pointer;" id="nav-date-trigger">
-          <span style="font-size:15px;font-weight:800;color:${dateStr === today() ? 'var(--accent)' : 'white'};">
+      <div class="dashboard-date-navigator">
+        <button class="btn btn-ghost dashboard-date-arrow" id="nav-date-prev">◀</button>
+        <div class="dashboard-date-trigger" id="nav-date-trigger">
+          <span class="dashboard-date-label ${dateStr === today() ? 'is-today' : ''}">
             ${dateStr === today() ? '✨ Hoy' : '📅 ' + formatDate(dateStr)}
           </span>
-          <span style="font-size:10px;color:var(--text-tertiary);">▼</span>
+          <span class="dashboard-date-caret">▼</span>
           <input type="date" id="nav-date-input" value="${dateStr}" max="${today()}" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;" />
         </div>
-        <button class="btn btn-ghost" id="nav-date-next" style="padding:6px 12px;font-size:16px;color:${dateStr >= today() ? 'rgba(255,255,255,0.1)' : 'var(--text-secondary)'};" ${dateStr >= today() ? 'disabled' : ''}>▶</button>
+        <button class="btn btn-ghost dashboard-date-arrow ${dateStr >= today() ? 'is-disabled' : ''}" id="nav-date-next" ${dateStr >= today() ? 'disabled' : ''}>▶</button>
       </div>
 
       ${dateStr !== today() ? `
-        <div style="background:linear-gradient(135deg, rgba(255,192,20,0.18), rgba(255,192,20,0.05));border:1px solid rgba(255,192,20,0.3);padding:10px 16px;border-radius:18px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;color:white;font-size:13px;animation:fadeIn 0.3s ease;">
+        <div class="editing-day-banner">
           <div style="display:flex;align-items:center;gap:8px;">
             <span style="font-size:18px;">⏳</span>
             <span>Editando día: <b>${formatDate(dateStr)}</b></span>
           </div>
-          <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px;color:var(--accent);background:rgba(0,0,0,0.4);border-radius:12px;font-weight:700;" id="btn-return-today">Volver a Hoy</button>
+          <button class="btn btn-ghost editing-day-banner-btn" id="btn-return-today">Volver a Hoy</button>
         </div>
       ` : ''}
 
@@ -373,7 +373,7 @@ export function renderDashboard(container, { navigateTo, selectedDate }) {
   container.querySelectorAll('.food-card').forEach(card => {
     // Exclude the delete button from triggering the edit
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.food-card-delete')) return;
+      if (e.target.closest('.food-card-delete, [data-photo-zoom]')) return;
       
       const id = card.dataset.entryId;
       const entry = entries.find(e => e.id === id);
@@ -391,6 +391,8 @@ export function renderDashboard(container, { navigateTo, selectedDate }) {
       }
     });
   });
+
+  bindZoomableImages(container);
 
   container.querySelectorAll('.food-card-delete').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -492,61 +494,40 @@ export function renderDashboard(container, { navigateTo, selectedDate }) {
     modal.addEventListener('click', (ev) => { if (ev.target === modal) close(); });
     
     // File upload reader
-    modal.querySelector('#preset-modal-file').addEventListener('change', (ev) => {
+    modal.querySelector('#preset-modal-file').addEventListener('change', async (ev) => {
       const file = ev.target.files[0];
-      if (file) {
-        // Compress/limit photo size to prevent massive storage consumption
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const img = new Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const MAX_WIDTH = 250;
-            const MAX_HEIGHT = 250;
-            let width = img.width;
-            let height = img.height;
-            
-            if (width > height) {
-              if (width > MAX_WIDTH) {
-                height *= MAX_WIDTH / width;
-                width = MAX_WIDTH;
-              }
-            } else {
-              if (height > MAX_HEIGHT) {
-                width *= MAX_HEIGHT / height;
-                height = MAX_HEIGHT;
-              }
-            }
-            
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, width, height);
-            
-            photoBase64 = canvas.toDataURL('image/jpeg', 0.7);
-            const preview = modal.querySelector('#preset-photo-preview');
-            preview.innerHTML = `<img src="${photoBase64}" style="width:100%;height:100%;object-fit:cover;" />`;
-            
-            // Re-render "Quitar" button if not present
-            if (!modal.querySelector('#preset-photo-remove')) {
-              const removeBtn = document.createElement('button');
-              removeBtn.id = 'preset-photo-remove';
-              removeBtn.className = 'btn btn-ghost btn-sm';
-              removeBtn.style.cssText = 'color:var(--danger);font-size:12px;border:none;padding:4px 8px;';
-              removeBtn.textContent = 'Quitar';
-              preview.nextElementSibling.after(removeBtn);
-              
-              removeBtn.addEventListener('click', (ev2) => {
-                ev2.preventDefault();
-                photoBase64 = null;
-                preview.innerHTML = '<span style="font-size:20px;color:var(--text-tertiary);">📸</span>';
-                removeBtn.remove();
-              });
-            }
-          };
-          img.src = e.target.result;
-        };
-        reader.readAsDataURL(file);
+      if (!file) return;
+
+      try {
+        const prepared = await prepareImageUpload(file, {
+          maxWidth: 350,
+          maxHeight: 350,
+          quality: 0.72
+        });
+        photoBase64 = prepared.dataUrl;
+        const preview = modal.querySelector('#preset-photo-preview');
+        preview.innerHTML = `<img src="${photoBase64}" style="width:100%;height:100%;object-fit:cover;" />`;
+
+        // Re-render "Quitar" button if not present
+        if (!modal.querySelector('#preset-photo-remove')) {
+          const removeBtn = document.createElement('button');
+          removeBtn.id = 'preset-photo-remove';
+          removeBtn.className = 'btn btn-ghost btn-sm';
+          removeBtn.style.cssText = 'color:var(--danger);font-size:12px;border:none;padding:4px 8px;';
+          removeBtn.textContent = 'Quitar';
+          preview.nextElementSibling.after(removeBtn);
+
+          removeBtn.addEventListener('click', (ev2) => {
+            ev2.preventDefault();
+            photoBase64 = null;
+            preview.innerHTML = '<span style="font-size:20px;color:var(--text-tertiary);">📸</span>';
+            removeBtn.remove();
+          });
+        }
+      } catch (err) {
+        showToast(toFriendlyImageError(err), 'error');
+      } finally {
+        ev.target.value = '';
       }
     });
 

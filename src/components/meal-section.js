@@ -74,7 +74,7 @@ export function renderMealSection(slot, entries = [], onAdd, onDelete) {
                 return `
                   <div class="card-glass combo-container" style="border: 1px solid rgba(0,206,201,0.25); background: rgba(0,206,201,0.03); border-radius: 24px; padding: 12px; margin-bottom: var(--space-sm); display: flex; flex-direction: column; gap: 8px;">
                     <div style="display:flex; gap:12px; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:10px;">
-                      ${photoUrl ? `<img src="${photoUrl}" style="width:52px; height:52px; border-radius:14px; object-fit:cover; border:1px solid rgba(255,255,255,0.15);" />` : ''}
+                      ${photoUrl ? `<img src="${photoUrl}" data-photo-zoom="${photoUrl}" data-photo-download="calia-plato-combinado-${g.id}.jpg" style="width:52px; height:52px; border-radius:14px; object-fit:cover; border:1px solid rgba(255,255,255,0.15); cursor:zoom-in;" />` : ''}
                       <div>
                         <div style="font-weight:800; font-size:14px; color:white;">✨ Plato Combinado IA</div>
                         <div style="font-size:11px; color:var(--accent); font-weight:700;">🔥 ${Math.round(groupCalories)} kcal (${Math.round(groupProtein)}g PRO)</div>

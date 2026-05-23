@@ -20,8 +20,8 @@ export function renderCalorieRing(consumed, target) {
       <svg class="calorie-ring-svg" viewBox="0 0 180 180">
         <defs>
           <linearGradient id="calorieGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" style="stop-color:#6C5CE7"/>
-            <stop offset="100%" style="stop-color:#00CEC9"/>
+            <stop offset="0%" style="stop-color:var(--ring-start, #6C5CE7)"/>
+            <stop offset="100%" style="stop-color:var(--ring-end, #00CEC9)"/>
           </linearGradient>
         </defs>
         <circle class="calorie-ring-bg" cx="90" cy="90" r="${radius}" />

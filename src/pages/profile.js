@@ -4,6 +4,7 @@ import { storage } from '../services/storage.js';
 import { showToast } from '../utils/helpers.js';
 import { openCalculatorModal } from '../components/calculator-modal.js';
 import { openTutorialModal } from '../components/tutorial-modal.js';
+import { APP_VERSION } from '../utils/constants.js';
 
 export function renderProfile(container, { navigateTo, onLogout }) {
   const goals = storage.getGoals();
@@ -43,6 +44,7 @@ export function renderProfile(container, { navigateTo, onLogout }) {
               </div>
             ` : apiKeys.map(k => {
               const isActive = settings.activeApiKeyId === k.id;
+              const isServerManaged = Boolean(k.isServerManaged);
               const providerNames = { gemini: 'Gemini', openai: 'OpenAI', claude: 'Claude' };
               const provName = providerNames[k.provider] || k.provider.toUpperCase();
               
@@ -52,18 +54,19 @@ export function renderProfile(container, { navigateTo, onLogout }) {
                     <div style="font-weight:bold;font-size:14px;color:var(--text-primary);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;">${k.name}</span>
                       <span style="background:rgba(255,255,255,0.1);color:var(--text-secondary);font-size:9px;font-weight:bold;padding:1px 5px;border-radius:6px;text-transform:uppercase;">${provName}</span>
+                      ${isServerManaged ? '<span style="background:rgba(0,206,201,0.14);color:var(--accent);font-size:9px;font-weight:900;padding:2px 6px;border-radius:8px;text-transform:uppercase;">Servidor</span>' : ''}
                       ${isActive ? '<span style="background:var(--accent);color:#000;font-size:9px;font-weight:900;padding:2px 6px;border-radius:8px;text-transform:uppercase;">Usando</span>' : ''}
                     </div>
                     <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;font-family:var(--font-mono)">
-                      ${k.key.substring(0, 6)}••••••••
+                      ${isServerManaged ? 'Clave protegida en servidor' : `${k.key.substring(0, 6)}••••••••`}
                     </div>
                   </div>
                   <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
                     ${!isActive ? `
                       <button class="btn btn-accent btn-sm btn-activate-key" data-id="${k.id}" style="padding:6px 12px;font-size:12px;border-radius:10px;font-weight:700;">Usar</button>
                     ` : ''}
-                    <button class="btn btn-ghost btn-sm btn-edit-key" data-id="${k.id}" style="padding:6px 10px;font-size:12px;border:1px solid var(--border);border-radius:10px;color:var(--text-primary);">✏️</button>
-                    <button class="btn btn-ghost btn-sm btn-delete-key" data-id="${k.id}" style="padding:6px 10px;font-size:12px;border:1px solid rgba(239,68,68,0.2);border-radius:10px;color:var(--danger);">✕</button>
+                    ${!isServerManaged ? `<button class="btn btn-ghost btn-sm btn-edit-key" data-id="${k.id}" style="padding:6px 10px;font-size:12px;border:1px solid var(--border);border-radius:10px;color:var(--text-primary);">✏️</button>` : ''}
+                    ${!isServerManaged ? `<button class="btn btn-ghost btn-sm btn-delete-key" data-id="${k.id}" style="padding:6px 10px;font-size:12px;border:1px solid rgba(239,68,68,0.2);border-radius:10px;color:var(--danger);">✕</button>` : ''}
                   </div>
                 </div>
               `;
@@ -86,12 +89,9 @@ export function renderProfile(container, { navigateTo, onLogout }) {
 
           <div style="margin-top:var(--space-sm); border-top:1px solid rgba(255,255,255,0.06); padding-top:var(--space-sm)">
             <label style="display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
-              <span class="text-sm">✨ Modo Claro</span>
-              <input type="checkbox" id="light-theme-toggle" ${settings.lightTheme ? 'checked' : ''} style="accent-color:var(--accent); transform:scale(1.2)" />
+              <span class="text-sm">Modo oscuro</span>
+              <input type="checkbox" id="dark-theme-toggle" ${settings.lightTheme ? '' : 'checked'} style="accent-color:var(--accent); transform:scale(1.2)" />
             </label>
-            <div class="text-xs text-tertiary mt-xs">
-              Usa un diseño luminoso para ambientes claros y luz solar.
-            </div>
           </div>
         </div>
       </div>
@@ -168,7 +168,7 @@ export function renderProfile(container, { navigateTo, onLogout }) {
 
       <!-- About -->
       <div style="text-align:center;padding:var(--space-lg);color:var(--text-tertiary);font-size:12px">
-        <p style="font-weight:800;font-size:14px;color:white;">Cal-<span style="color:var(--accent)">IA</span> v1.8</p>
+        <p style="font-weight:800;font-size:14px;color:white;">Cal-<span style="color:var(--accent)">IA</span> v${APP_VERSION}</p>
         <button class="btn btn-ghost btn-sm" id="force-update-profile" style="padding:4px 12px; font-size:12px; color:var(--accent); border:1px solid rgba(0,206,201,0.3); border-radius:12px; margin:0 auto;">🔄 Actualizar App</button>
       </div>
     </div>
@@ -178,6 +178,28 @@ export function renderProfile(container, { navigateTo, onLogout }) {
   const openConfigureKeyModal = (keyId = null) => {
     const isEdit = !!keyId;
     const keyItem = isEdit ? apiKeys.find(k => k.id === keyId) : null;
+
+    const getProviderHelp = (provider = 'gemini') => {
+      if (provider === 'openai') {
+        return {
+          label: 'Cómo obtener tu key de OpenAI',
+          href: 'https://platform.openai.com/api-keys'
+        };
+      }
+      if (provider === 'claude') {
+        return {
+          label: 'Cómo obtener tu key de Claude',
+          href: 'https://console.anthropic.com/settings/keys'
+        };
+      }
+      return {
+        label: 'Cómo obtener tu key de Gemini',
+        href: 'https://aistudio.google.com/apikey'
+      };
+    };
+
+    const initialProvider = keyItem?.provider || 'gemini';
+    const initialHelp = getProviderHelp(initialProvider);
     
     const modal = document.createElement('div');
     modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,0.85);backdrop-filter:blur(10px);animation:fadeIn 0.2s ease-out;';
@@ -212,6 +234,10 @@ export function renderProfile(container, { navigateTo, onLogout }) {
           </div>
         </div>
 
+        <a id="key-provider-help-link" href="${initialHelp.href}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-full" style="margin-bottom:16px;border:1px solid rgba(0,206,201,0.22);border-radius:14px;color:var(--accent);font-weight:700;padding:10px 12px;font-size:13px;text-decoration:none;">
+          ${initialHelp.label}
+        </a>
+
         <!-- NEW: Beautiful error block with links and troubleshooting steps -->
         <div id="key-modal-error-container" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:18px; padding:14px; margin-bottom:16px; font-size:12px; line-height:1.4; color:#FCA5A5;">
           <div style="font-weight:800; display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#EF4444;" id="key-error-title">
@@ -240,11 +266,32 @@ export function renderProfile(container, { navigateTo, onLogout }) {
     const errorTitle = modal.querySelector('#key-error-title');
     const errorDesc = modal.querySelector('#key-error-desc');
     const errorSolution = modal.querySelector('#key-error-solution');
+    const providerHelpLink = modal.querySelector('#key-provider-help-link');
+    const providerSelect = modal.querySelector('#key-modal-provider');
+
+    const updateProviderHelpLink = (provider = initialProvider) => {
+      if (!providerHelpLink) return;
+      const help = getProviderHelp(provider);
+      providerHelpLink.href = help.href;
+      providerHelpLink.textContent = help.label;
+    };
+
+    updateProviderHelpLink(initialProvider);
+    providerSelect?.addEventListener('change', () => {
+      updateProviderHelpLink(providerSelect.value);
+    });
 
     function getFriendlyErrorExplanation(provider, rawError) {
       const err = (rawError || '').toLowerCase();
       
       if (provider === 'gemini') {
+        if (err.includes('leaked') || err.includes('compromised') || err.includes('disabled') || err.includes('revoked')) {
+          return {
+            title: '🚨 Clave expuesta o desactivada',
+            desc: 'Google deshabilitó esta clave porque detectó que quedó expuesta.',
+            solution: 'Genera una clave nueva en <a href="https://aistudio.google.com/" target="_blank" style="color:var(--accent);text-decoration:underline;font-weight:bold;">Google AI Studio</a> y vuelve a guardarla. Si esta app usa una clave del servidor, actualízala también en Vercel.'
+          };
+        }
         if (err.includes('api key not valid') || err.includes('not found') || err.includes('invalid') || err.includes('key')) {
           return {
             title: '🔑 Clave inválida en Google AI Studio',
@@ -267,6 +314,13 @@ export function renderProfile(container, { navigateTo, onLogout }) {
       }
 
       if (provider === 'openai') {
+        if (err.includes('leaked') || err.includes('compromised') || err.includes('disabled') || err.includes('revoked')) {
+          return {
+            title: '🚨 Clave de OpenAI expuesta',
+            desc: 'OpenAI deshabilitó esta clave porque fue detectada como filtrada o comprometida.',
+            solution: 'Elimina esa clave y crea una nueva en <a href="https://platform.openai.com/api-keys" target="_blank" style="color:var(--accent);text-decoration:underline;font-weight:bold;">OpenAI API Keys</a>.'
+          };
+        }
         if (err.includes('incorrect api key') || err.includes('invalid') || err.includes('not found')) {
           return {
             title: '🔑 Clave incorrecta de OpenAI',
@@ -289,6 +343,13 @@ export function renderProfile(container, { navigateTo, onLogout }) {
       }
 
       if (provider === 'claude') {
+        if (err.includes('leaked') || err.includes('compromised') || err.includes('disabled') || err.includes('revoked')) {
+          return {
+            title: '🚨 Clave de Claude expuesta',
+            desc: 'Anthropic deshabilitó esta clave porque quedó expuesta o comprometida.',
+            solution: 'Genera una nueva clave en <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--accent);text-decoration:underline;font-weight:bold;">Anthropic Console</a> y reemplázala aquí.'
+          };
+        }
         if (err.includes('key') || err.includes('invalid') || err.includes('header')) {
           return {
             title: '🔑 Clave inválida de Anthropic Claude',
@@ -421,11 +482,12 @@ export function renderProfile(container, { navigateTo, onLogout }) {
     showToast(e.target.checked ? 'Guardado automático activado' : 'Guardado automático desactivado', 'info');
   });
 
-  // Light Theme Toggle
-  container.querySelector('#light-theme-toggle').addEventListener('change', (e) => {
-    storage.setSetting('lightTheme', e.target.checked);
-    document.body.classList.toggle('light-theme', e.target.checked);
-    showToast(e.target.checked ? '✨ Modo Claro activado' : '🌙 Modo Oscuro activado', 'success');
+  // Dark Theme Toggle
+  container.querySelector('#dark-theme-toggle').addEventListener('change', (e) => {
+    const lightThemeEnabled = !e.target.checked;
+    storage.setSetting('lightTheme', lightThemeEnabled);
+    document.body.classList.toggle('light-theme', lightThemeEnabled);
+    showToast(lightThemeEnabled ? 'Modo claro activado' : 'Modo oscuro activado', 'success');
   });
 
   const goalInputs = [

@@ -4,14 +4,35 @@ export default async function handler(req, res) {
   }
 
   const { provider, apiKey } = req.body;
-  if (!provider || !apiKey) {
-    return res.status(400).json({ error: 'Provider y API Key son requeridos' });
+  if (!provider) {
+    return res.status(400).json({ error: 'Provider es requerido' });
+  }
+
+  const resolveApiKey = (targetProvider, explicitKey = '') => {
+    const trimmed = typeof explicitKey === 'string' ? explicitKey.trim() : '';
+    if (trimmed) return trimmed;
+
+    if (targetProvider === 'gemini') {
+      return process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
+    }
+    if (targetProvider === 'openai') {
+      return process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY || '';
+    }
+    if (targetProvider === 'claude') {
+      return process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.VITE_CLAUDE_API_KEY || '';
+    }
+    return '';
+  };
+
+  const resolvedApiKey = resolveApiKey(provider, apiKey);
+  if (!resolvedApiKey) {
+    return res.status(200).json({ valid: false, error: 'No hay una API Key disponible para este proveedor' });
   }
 
   try {
     if (provider === 'gemini') {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${resolvedApiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -29,7 +50,7 @@ export default async function handler(req, res) {
 
     if (provider === 'openai') {
       const response = await fetch('https://api.openai.com/v1/models', {
-        headers: { 'Authorization': `Bearer ${apiKey}` },
+        headers: { 'Authorization': `Bearer ${resolvedApiKey}` },
       });
       if (!response.ok) {
         const data = await response.json();
@@ -43,7 +64,7 @@ export default async function handler(req, res) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
+          'x-api-key': resolvedApiKey,
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({

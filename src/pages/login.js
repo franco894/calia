@@ -1,7 +1,7 @@
 // ===== CALIA LOGIN PAGE =====
 import { auth } from '../services/auth.js';
 import { storage } from '../services/storage.js';
-import { DEFAULT_GOALS, DEFAULT_DAY_CONFIGS, DEFAULT_MEAL_SLOTS, DEFAULT_SUPPLEMENTS } from '../utils/constants.js';
+import { DEFAULT_GOALS, DEFAULT_DAY_CONFIGS, DEFAULT_MEAL_SLOTS, DEFAULT_SUPPLEMENTS, APP_VERSION } from '../utils/constants.js';
 import { showToast } from '../utils/helpers.js';
 import { openCalculatorModal } from '../components/calculator-modal.js';
 import { openTutorialModal } from '../components/tutorial-modal.js';
@@ -90,7 +90,7 @@ export function renderLogin(container, { onLogin }) {
         </div>
 
         <div class="login-footer" style="display:flex; flex-direction:column; align-items:center; gap:8px;">
-          <p>Tracking nutricional con inteligencia artificial <span style="opacity:0.5">• v1.5</span></p>
+          <p>Tracking nutricional con inteligencia artificial <span style="opacity:0.5">• v${APP_VERSION}</span></p>
           <button class="btn btn-ghost btn-sm" id="force-update-login" style="padding:4px 12px; font-size:12px; color:var(--accent); border:1px solid rgba(0,206,201,0.3); border-radius:12px;">🔄 Actualizar App</button>
         </div>
 
@@ -278,6 +278,8 @@ export function renderLogin(container, { onLogin }) {
                 const errMsg = (err.message || '').toLowerCase();
                 if (errMsg.includes('quota') || errMsg.includes('limit') || errMsg.includes('exhausted') || errMsg.includes('429')) {
                   statusText.textContent = '❌ Sin fondos / Cuota excedida.';
+                } else if (errMsg.includes('leaked') || errMsg.includes('compromised') || errMsg.includes('disabled') || errMsg.includes('revoked')) {
+                  statusText.textContent = '❌ Clave expuesta o desactivada.';
                 } else {
                   statusText.textContent = '❌ API Key incorrecta o no válida.';
                 }

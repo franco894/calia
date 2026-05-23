@@ -48,18 +48,21 @@ class CaliaApp {
       this.showLogin();
     } else {
       storage.initUserDefaults();
+      await storage.syncServerManagedAiProfile();
       const settings = storage.getSettings();
-      document.body.classList.toggle('light-theme', !!settings.lightTheme);
+      document.body.classList.toggle('light-theme', settings.lightTheme !== false);
       this.navigateTo(PAGES.DASHBOARD);
     }
   }
 
   showLogin() {
+    document.body.classList.add('light-theme');
     renderLogin(this.pageContainer, {
-      onLogin: () => {
+      onLogin: async () => {
         document.getElementById('bottom-nav').style.display = 'flex';
+        await storage.syncServerManagedAiProfile();
         const settings = storage.getSettings();
-        document.body.classList.toggle('light-theme', !!settings.lightTheme);
+        document.body.classList.toggle('light-theme', settings.lightTheme !== false);
         this.navigateTo(PAGES.DASHBOARD);
       }
     });

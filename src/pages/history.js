@@ -2,7 +2,7 @@
 import { storage } from '../services/storage.js';
 import { renderCalorieRing, renderMacroBars } from '../components/macro-ring.js';
 import { renderFoodCard } from '../components/food-card.js';
-import { today, getWeekDates, fmt } from '../utils/helpers.js';
+import { today, getWeekDates, fmt, bindZoomableImages } from '../utils/helpers.js';
 
 export function renderHistory(container, { navigateTo }) {
   let selectedDate = today();
@@ -124,6 +124,8 @@ export function renderHistory(container, { navigateTo }) {
         render();
       });
     });
+
+    bindZoomableImages(container);
 
     container.querySelector('#history-edit-day-btn')?.addEventListener('click', () => {
       navigateTo('dashboard', { selectedDate });

@@ -1,9 +1,486 @@
 // ===== CALIA SCANNER PAGE =====
 import { storage } from '../services/storage.js';
 import { showFoodConfirmModal, showSuppConfirmModal } from '../components/food-confirm-modal.js';
-import { showToast, debounce, downloadBase64Image, formatServingDisplay, getPortionReference } from '../utils/helpers.js';
+import { showToast, debounce, downloadBase64Image, formatServingDisplay, getPortionReference, normalizeText, openImageLightbox, bindZoomableImages, prepareImageUpload, extractBase64ImagePayload, fetchJsonSafe, toFriendlyImageError } from '../utils/helpers.js';
+import { GENERIC_FOOD_CATALOG, CURATED_FOOD_CATALOG } from '../utils/constants.js';
 
 let barcodeScanner = null;
+
+const SEARCH_TERM_ALIASES = {
+  huevo: ['huevos', 'egg', 'eggs'],
+  huevos: ['huevo', 'egg', 'eggs'],
+  yogur: ['yogurt', 'yoghurt'],
+  yogurt: ['yogur', 'yoghurt'],
+  platano: ['banana'],
+  banana: ['platano'],
+  atun: ['tuna'],
+  leche: ['milk'],
+  queso: ['cheese'],
+  pollo: ['chicken'],
+  arroz: ['rice'],
+  avena: ['oats', 'oatmeal'],
+  pan: ['bread'],
+};
+
+const COMMON_SEARCH_TOKENS = uniqueValues([
+  ...Object.keys(SEARCH_TERM_ALIASES),
+  ...Object.values(SEARCH_TERM_ALIASES).flat(),
+  ...[...GENERIC_FOOD_CATALOG, ...CURATED_FOOD_CATALOG]
+    .flatMap(food => [food.name, ...(food.aliases || [])])
+    .flatMap(value => normalizeText(value).split(/[^a-z0-9+]+/).filter(Boolean)),
+  'soprole',
+  'trencito',
+  'electrolit',
+  'huevo',
+  'huevos',
+  'chocolate',
+  'galleta',
+  'galletas',
+  'marraqueta',
+  'frugele',
+  'frugeles',
+  'manjarate',
+  'uno',
+  'uno mas uno',
+  '1+1',
+]);
+
+const GENERIC_SEARCH_VOCAB = new Set(
+  GENERIC_FOOD_CATALOG
+    .flatMap(food => [food.name, ...(food.aliases || [])])
+    .flatMap(value => splitSearchTokens(value))
+);
+
+const GENERIC_SEARCH_PHRASES = new Set(
+  GENERIC_FOOD_CATALOG
+    .flatMap(food => [food.name, ...(food.aliases || [])])
+    .map(value => normalizeText(value))
+    .filter(Boolean)
+);
+
+function uniqueValues(values = []) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function extractSearchTokens(value = '') {
+  return normalizeText(value).match(/[a-z0-9]+(?:\+[a-z0-9]+)*/g) || [];
+}
+
+function levenshteinDistance(a = '', b = '') {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp = Array.from({ length: rows }, () => Array(cols).fill(0));
+
+  for (let i = 0; i < rows; i++) dp[i][0] = i;
+  for (let j = 0; j < cols; j++) dp[0][j] = j;
+
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+
+  return dp[a.length][b.length];
+}
+
+function getCorrectedToken(token = '') {
+  if (!token || token.length < 4 || /\d/.test(token)) return token;
+
+  let best = token;
+  let bestDistance = Infinity;
+
+  COMMON_SEARCH_TOKENS.forEach(candidate => {
+    if (!candidate || candidate.includes(' ') || candidate.includes('+')) return;
+    if (Math.abs(candidate.length - token.length) > 2) return;
+
+    const distance = levenshteinDistance(token, candidate);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  });
+
+  const maxDistance = token.length >= 6 ? 2 : 1;
+  return bestDistance <= maxDistance ? best : token;
+}
+
+function splitSearchTokens(value = '') {
+  return uniqueValues(
+    extractSearchTokens(value)
+      .map(getCorrectedToken)
+      .filter(Boolean)
+  );
+}
+
+function compactSearchText(value = '') {
+  return normalizeText(value).replace(/[^a-z0-9]+/g, '');
+}
+
+function getTokenVariants(token = '') {
+  return uniqueValues([token, ...(SEARCH_TERM_ALIASES[token] || [])]);
+}
+
+function buildSearchVariants(query = '') {
+  const trimmed = query.trim();
+  const normalized = normalizeText(trimmed);
+  const rawTokens = extractSearchTokens(trimmed);
+  const tokens = splitSearchTokens(trimmed);
+  const correctedPhrase = tokens.join(' ');
+  const variants = new Set([trimmed, normalized, rawTokens.join(' '), correctedPhrase].filter(Boolean));
+  const hasOnePlusOne = /1\s*\+\s*1/.test(trimmed) || normalized.includes('1+1');
+
+  if (trimmed.includes('+')) {
+    variants.add(trimmed.replace(/\+/g, ' '));
+  }
+
+  if (hasOnePlusOne) {
+    variants.add(normalized.replace(/1\s*\+\s*1/g, 'uno mas uno'));
+    variants.add(normalized.replace(/1\s*\+\s*1/g, '1 1'));
+  }
+
+  tokens.forEach((token, idx) => {
+    (SEARCH_TERM_ALIASES[token] || []).forEach(alias => {
+      const nextTokens = [...tokens];
+      nextTokens[idx] = alias;
+      variants.add(nextTokens.join(' '));
+    });
+  });
+
+  return [...variants]
+    .map(variant => variant.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
+function isLikelyGenericSearch(query = '') {
+  const normalized = normalizeText(query);
+  const tokens = splitSearchTokens(query);
+  if (tokens.length === 0) return false;
+  if (/[0-9+]/.test(normalized)) return false;
+  if (GENERIC_SEARCH_PHRASES.has(normalized)) return true;
+
+  const meaningfulTokens = tokens.filter(token => token.length > 1);
+  if (meaningfulTokens.length === 0) return false;
+
+  return meaningfulTokens.every(token => {
+    if (GENERIC_SEARCH_VOCAB.has(token)) return true;
+    return getTokenVariants(token).some(variant => GENERIC_SEARCH_VOCAB.has(variant));
+  });
+}
+
+function isLikelyCuratedCatalogSearch(query = '') {
+  const normalized = normalizeText(query);
+  return normalized.includes('1+1')
+    || normalized.includes('1 1')
+    || normalized.includes('uno mas uno')
+    || normalized.includes('uno más uno')
+    || normalized.includes('manjarate');
+}
+
+function scoreFoodForQuery(food = {}, query = '') {
+  const name = normalizeText(food.name || food.product_name || '');
+  const brand = normalizeText(food.brand || food.brands || '');
+  const aliasText = normalizeText((food.aliases || []).join(' '));
+  const ingredients = normalizeText(food.ingredients || food.ingredients_text_es || food.ingredients_text || '');
+  const haystack = [name, brand, aliasText, ingredients].filter(Boolean).join(' ');
+  const nameTokens = splitSearchTokens(name);
+  const brandTokens = splitSearchTokens(brand);
+  const aliasTokens = splitSearchTokens(aliasText);
+  const compactName = compactSearchText(name);
+  const compactHaystack = compactSearchText(haystack);
+  const queryTokens = splitSearchTokens(query);
+  const phraseVariants = buildSearchVariants(query).map(variant => normalizeText(variant));
+  const compactVariants = phraseVariants.map(compactSearchText).filter(Boolean);
+
+  let score = 0;
+  let matchedGroups = 0;
+
+  phraseVariants.forEach(phrase => {
+    if (!phrase) return;
+    if (name === phrase) score = Math.max(score, 240);
+    else if (name.startsWith(phrase)) score = Math.max(score, 190);
+    else if (name.includes(phrase)) score = Math.max(score, 150);
+    else if (brand === phrase) score = Math.max(score, 120);
+    else if (brand.includes(phrase)) score = Math.max(score, 90);
+    else if (haystack.includes(phrase)) score = Math.max(score, 72);
+  });
+
+  compactVariants.forEach(phrase => {
+    if (!phrase) return;
+    if (compactName.includes(phrase)) score = Math.max(score, 160);
+    else if (compactHaystack.includes(phrase)) score = Math.max(score, 84);
+  });
+
+  queryTokens.forEach(token => {
+    const variants = getTokenVariants(token);
+    let tokenScore = 0;
+    let matched = false;
+
+    variants.forEach(variant => {
+      const compactVariant = compactSearchText(variant);
+      if (!variant) return;
+
+      if (nameTokens.includes(variant)) {
+        tokenScore = Math.max(tokenScore, token.length <= 2 ? 28 : 40);
+        matched = true;
+      } else if (aliasTokens.includes(variant)) {
+        tokenScore = Math.max(tokenScore, token.length <= 2 ? 24 : 34);
+        matched = true;
+      } else if (name.includes(variant)) {
+        tokenScore = Math.max(tokenScore, token.length <= 2 ? 18 : 26);
+        matched = true;
+      } else if (aliasText.includes(variant)) {
+        tokenScore = Math.max(tokenScore, token.length <= 2 ? 16 : 22);
+        matched = true;
+      } else if (brandTokens.includes(variant)) {
+        tokenScore = Math.max(tokenScore, token.length <= 2 ? 18 : 24);
+        matched = true;
+      } else if (brand.includes(variant)) {
+        tokenScore = Math.max(tokenScore, token.length <= 2 ? 12 : 16);
+        matched = true;
+      } else if (compactVariant && compactHaystack.includes(compactVariant)) {
+        tokenScore = Math.max(tokenScore, token.length <= 2 ? 8 : 12);
+        matched = true;
+      }
+    });
+
+    if (matched) {
+      matchedGroups += 1;
+      score += tokenScore;
+    } else if (queryTokens.length > 1 || token.length > 2) {
+      score -= token.length <= 2 ? 12 : 20;
+    }
+  });
+
+  if (queryTokens.length > 0) {
+    if (matchedGroups === queryTokens.length) score += 42;
+    else if (matchedGroups > 0) score += Math.round((matchedGroups / queryTokens.length) * 18);
+  }
+
+  if (food.image_small_url || food.image) score += 4;
+  if (food.barcode || food.code) score += 3;
+  if (food.brand === 'Base nutricional') score += 2;
+
+  return score;
+}
+
+function dedupeFoodsByIdentity(foods = []) {
+  const seen = new Set();
+  return foods.filter(food => {
+    const key = [
+      food.barcode || food.code || '',
+      normalizeText(food.name || food.product_name || ''),
+      normalizeText(food.brand || food.brands || '')
+    ].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function removeDuplicateFoods(baseFoods = [], candidateFoods = []) {
+  const existing = new Set(
+    baseFoods.map(food => [
+      compactSearchText(food.name || ''),
+      compactSearchText(food.brand || '')
+    ].join('|'))
+  );
+
+  return candidateFoods.filter(food => {
+    const key = [
+      compactSearchText(food.name || ''),
+      compactSearchText(food.brand || '')
+    ].join('|');
+    return !existing.has(key);
+  });
+}
+
+function rankLocalFoods(query, foods = []) {
+  return dedupeFoodsByIdentity(
+    foods.map(food => ({
+      ...food,
+      __searchScore: scoreFoodForQuery(food, query)
+    }))
+  )
+    .filter(food => food.__searchScore >= 24)
+    .sort((a, b) => b.__searchScore - a.__searchScore)
+    .slice(0, 6);
+}
+
+function rankGenericFoods(query, foods = []) {
+  return dedupeFoodsByIdentity(
+    foods.map(food => ({
+      ...food,
+      __searchScore: scoreFoodForQuery(food, query),
+      __matchSource: 'generic_web'
+    }))
+  )
+    .filter(food => food.__searchScore >= 18)
+    .sort((a, b) => b.__searchScore - a.__searchScore)
+    .slice(0, 8);
+}
+
+function rankCuratedFoods(query, foods = []) {
+  return dedupeFoodsByIdentity(
+    foods.map(food => ({
+      ...food,
+      __searchScore: scoreFoodForQuery(food, query),
+      __matchSource: 'curated_catalog'
+    }))
+  )
+    .filter(food => food.__searchScore >= 18)
+    .sort((a, b) => b.__searchScore - a.__searchScore)
+    .slice(0, 8);
+}
+
+function mapOpenFoodFactsProduct(product = {}) {
+  const n = product.nutriments || {};
+  return {
+    name: product.product_name || 'Sin nombre',
+    brand: product.brands || '',
+    calories: n['energy-kcal_100g'] || 0,
+    protein: n.proteins_100g || 0,
+    carbs: n.carbohydrates_100g || 0,
+    fat: n.fat_100g || 0,
+    fiber: n.fiber_100g || 0,
+    servingSize: 100,
+    servingUnit: 'g',
+    servingQuantity: parseFloat(product.product_quantity || product.serving_quantity || product.serving_size) || 150,
+    ingredients: product.ingredients_text_es || product.ingredients_text || '',
+    barcode: product.code || '',
+    image_small_url: product.image_small_url || '',
+  };
+}
+
+async function fetchOnlineFoodMatches(query) {
+  const variants = buildSearchVariants(query);
+  const responses = await Promise.allSettled(
+    variants.map(async variant => {
+      const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(variant)}&search_simple=1&action=process&json=1&page_size=24&lc=es&fields=product_name,brands,nutriments,image_small_url,code,product_quantity,serving_quantity,serving_size,ingredients_text_es,ingredients_text`;
+      const res = await fetch(url);
+      const data = await res.json();
+      return (data.products || [])
+        .filter(product => product.product_name && (product.nutriments?.['energy-kcal_100g'] || 0) > 0)
+        .map(mapOpenFoodFactsProduct);
+    })
+  );
+
+  const products = responses
+    .filter(result => result.status === 'fulfilled')
+    .flatMap(result => result.value);
+
+  return dedupeFoodsByIdentity(
+    products.map(product => ({
+      ...product,
+      __searchScore: scoreFoodForQuery(product, query)
+    }))
+  )
+    .filter(product => product.__searchScore >= 18)
+    .sort((a, b) => b.__searchScore - a.__searchScore)
+    .slice(0, 8);
+}
+
+async function fetchCatalogSearchMatches(query) {
+  try {
+    const res = await fetch(`/api/product-search?q=${encodeURIComponent(query)}`);
+    if (!res.ok) return [];
+
+    const data = await res.json();
+    return dedupeFoodsByIdentity(
+      (data.products || []).map(product => ({
+        ...product,
+        __matchSource: 'catalog_search',
+        __searchScore: scoreFoodForQuery(product, query)
+      }))
+    )
+      .filter(product => product.__searchScore >= 18)
+      .sort((a, b) => b.__searchScore - a.__searchScore)
+      .slice(0, 8);
+  } catch (err) {
+    console.warn('Catalog search fallback failed:', err);
+    return [];
+  }
+}
+
+async function fetchAiSearchMatches(query) {
+  const keyInfo = storage.getActiveApiKeyInfo();
+  const provider = keyInfo ? keyInfo.provider : 'gemini';
+  const apiKey = keyInfo ? keyInfo.key : '';
+  const hasAiAccess = storage.hasActiveAiAccess();
+
+  if (!hasAiAccess) return [];
+
+  const prompt = `Actúa como un buscador nutricional web especializado en productos alimenticios.
+El usuario buscó: "${query}".
+
+Objetivo:
+- Encontrar hasta 6 resultados relevantes de alimentos o productos reales.
+- Si la búsqueda tiene un error de tipeo, corrígelo.
+- Si es un alimento genérico (ej: huevo), incluye opciones genéricas útiles y realistas.
+- Si la búsqueda contiene algo como "1+1", interprétalo como parte del nombre comercial y prioriza coincidencias exactas o muy cercanas.
+- Prioriza Chile/Latinoamérica cuando aplique.
+
+Responde SOLO JSON válido con esta estructura:
+{"results":[{"name":"...","brand":"...","calories":0,"protein":0,"carbs":0,"fat":0,"fiber":0,"servingSize":100,"servingUnit":"g","servingQuantity":100,"portionReference":"..."}]}`;
+
+  try {
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider,
+        apiKey,
+        prompt,
+        enableSearch: provider === 'gemini'
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok) return [];
+
+    let text = data.text || '';
+    text = text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+    const parsed = JSON.parse(text);
+
+    return dedupeFoodsByIdentity(
+      (parsed.results || []).map(result => ({
+        name: result.name || 'Sin nombre',
+        brand: result.brand || '',
+        calories: parseFloat(result.calories) || 0,
+        protein: parseFloat(result.protein) || 0,
+        carbs: parseFloat(result.carbs) || 0,
+        fat: parseFloat(result.fat) || 0,
+        fiber: parseFloat(result.fiber) || 0,
+        servingSize: parseFloat(result.servingSize) || 100,
+        servingUnit: result.servingUnit || 'g',
+        servingQuantity: parseFloat(result.servingQuantity) || parseFloat(result.servingSize) || 100,
+        portionReference: result.portionReference || '',
+        image_small_url: '',
+        __matchSource: 'ai_web',
+        __searchScore: scoreFoodForQuery(result, query)
+      }))
+    )
+      .filter(result => result.__searchScore >= 24)
+      .sort((a, b) => b.__searchScore - a.__searchScore)
+      .slice(0, 6);
+  } catch (err) {
+    console.warn('AI search fallback failed:', err);
+    return [];
+  }
+}
+
+function renderResultThumb(product = {}, fallbackIcon = '🍽️', fallbackBg = 'rgba(255,255,255,0.05)') {
+  if (product.image_small_url) {
+    return `<img src="${product.image_small_url}" alt="" data-photo-zoom="${product.image_small_url}" data-photo-download="calia-producto-${normalizeText(product.name || 'foto').replace(/[^a-z0-9]+/g, '-') || 'foto'}.jpg" style="width:40px;height:40px;border-radius:10px;object-fit:cover;flex-shrink:0;background:rgba(255,255,255,0.05);cursor:zoom-in;" onerror="this.style.display='none'" />`;
+  }
+
+  return `<div style="width:40px;height:40px;border-radius:10px;background:${fallbackBg};display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">${fallbackIcon}</div>`;
+}
 
 export function renderScanner(container, { navigateTo, mealSlotId, isSupplement, selectedDate, createTypical, initialTab }) {
   const isCreatingTypical = Boolean(createTypical && !isSupplement);
@@ -224,6 +701,13 @@ export function renderScanner(container, { navigateTo, mealSlotId, isSupplement,
 
   function renderOnlineTab(subContainer) {
     const recentFoods = isSupplement ? storage.getSupplements().slice(0, 10) : storage.getRecentFoods().slice(0, 10);
+    const favoriteFoods = !isSupplement && !isCreatingTypical
+      ? storage.getFavoriteFoods().map(food => ({ ...food, __matchSource: 'favorite' }))
+      : [];
+    const localSearchPool = [
+      ...favoriteFoods,
+      ...recentFoods.map(food => ({ ...food, __matchSource: 'recent' }))
+    ];
     subContainer.innerHTML = `
       <div class="search-container">
         <span class="search-icon">🔍</span>
@@ -248,53 +732,273 @@ export function renderScanner(container, { navigateTo, mealSlotId, isSupplement,
 
     const searchInput = subContainer.querySelector('#food-search-input');
     const resultsDiv = subContainer.querySelector('#search-results');
+    let activeSearchRequest = 0;
 
     const doSearch = debounce(async (query) => {
-      if (query.length < 2) { resultsDiv.innerHTML = ''; return; }
+      const trimmedQuery = query.trim();
+      const requestId = ++activeSearchRequest;
+
+      if (trimmedQuery.length < 2) {
+        resultsDiv.innerHTML = '';
+        return;
+      }
+
+      const localMatches = rankLocalFoods(trimmedQuery, localSearchPool);
+      const baseCuratedMatches = rankCuratedFoods(trimmedQuery, CURATED_FOOD_CATALOG);
+      const baseGenericMatches = rankGenericFoods(trimmedQuery, GENERIC_FOOD_CATALOG);
       resultsDiv.innerHTML = '<div class="text-center text-secondary" style="padding:20px">Buscando...</div>';
+
       try {
-        const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=8&lc=es&fields=product_name,brands,nutriments,image_small_url,code,product_quantity,serving_quantity,serving_size,ingredients_text_es,ingredients_text`;
-        const res = await fetch(url);
-        const data = await res.json();
-        if (data.products && data.products.length > 0) {
-          // Filter out products without name or calories
-          const filtered = data.products.filter(p => p.product_name && (p.nutriments?.['energy-kcal_100g'] || 0) > 0);
-          if (filtered.length === 0) {
-            resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🔍</div><div class="empty-state-title">Sin resultados con datos nutricionales</div><div class="empty-state-text">Prueba con otro término o regístralo manualmente</div></div>';
-            return;
-          }
-          resultsDiv.innerHTML = filtered.map(p => {
-            const n = p.nutriments || {};
-            const thumb = p.image_small_url || '';
-            return `
-              <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify({
-                name: p.product_name || 'Sin nombre',
-                brand: p.brands || '',
-                calories: n['energy-kcal_100g'] || 0,
-                protein: n.proteins_100g || 0,
-                carbs: n.carbohydrates_100g || 0,
-                fat: n.fat_100g || 0,
-                fiber: n.fiber_100g || 0,
-                servingSize: 100,
-                servingUnit: 'g',
-                servingQuantity: parseFloat(p.product_quantity || p.serving_quantity || p.serving_size) || 150,
-                ingredients: p.ingredients_text_es || p.ingredients_text || '',
-                barcode: p.code || '',
-              })}'>
-                ${thumb ? `<img src="${thumb}" alt="" style="width:40px;height:40px;border-radius:10px;object-fit:cover;flex-shrink:0;background:rgba(255,255,255,0.05);" onerror="this.style.display='none'" />` : '<div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,0.05);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">🍽️</div>'}
-                <div style="flex:1;min-width:0">
-                  <div class="search-result-name truncate">${p.product_name || 'Sin nombre'}</div>
-                  <div class="search-result-brand">${p.brands || ''} ${n.proteins_100g ? `· P:${Math.round(n.proteins_100g)}g` : ''}</div>
-                </div>
-                <span class="search-result-kcal">${Math.round(n['energy-kcal_100g'] || 0)}</span>
-              </div>
-            `;
-          }).join('');
-          bindResultClicks(resultsDiv);
-        } else {
-          resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🔍</div><div class="empty-state-title">Sin resultados</div><div class="empty-state-text">Prueba con otro término de búsqueda</div></div>';
+        const [onlineMatches, catalogMatches] = await Promise.all([
+          fetchOnlineFoodMatches(trimmedQuery),
+          fetchCatalogSearchMatches(trimmedQuery)
+        ]);
+        const correctedPhrase = splitSearchTokens(trimmedQuery).join(' ');
+        const rawPhrase = extractSearchTokens(trimmedQuery).join(' ');
+        const needsAiFallback = (onlineMatches.length + catalogMatches.length) < 4 || /[0-9+]/.test(trimmedQuery) || (correctedPhrase && correctedPhrase !== rawPhrase);
+        const aiMatches = needsAiFallback
+          ? removeDuplicateFoods([...onlineMatches, ...catalogMatches], await fetchAiSearchMatches(trimmedQuery))
+          : [];
+        const curatedCatalogPool = dedupeFoodsByIdentity([
+          ...catalogMatches,
+          ...removeDuplicateFoods(catalogMatches, baseCuratedMatches)
+        ]);
+        const curatedMatches = removeDuplicateFoods(
+          [...onlineMatches, ...aiMatches],
+          curatedCatalogPool
+        );
+        const genericMatches = removeDuplicateFoods(
+          [...onlineMatches, ...aiMatches, ...curatedMatches],
+          baseGenericMatches
+        );
+        const prioritizeGenericResults = isLikelyGenericSearch(trimmedQuery) && genericMatches.length > 0;
+        const prioritizeCuratedResults = (catalogMatches.length > 0 || isLikelyCuratedCatalogSearch(trimmedQuery)) && curatedMatches.length > 0;
+
+        if (requestId !== activeSearchRequest) return;
+
+        if (localMatches.length === 0 && onlineMatches.length === 0 && aiMatches.length === 0 && curatedMatches.length === 0 && genericMatches.length === 0) {
+          resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🔍</div><div class="empty-state-title">Sin resultados claros</div><div class="empty-state-text">Prueba con otra forma de escribirlo o regístralo manualmente</div></div>';
+          return;
         }
+
+        resultsDiv.innerHTML = `
+          ${prioritizeGenericResults && genericMatches.length > 0 ? `
+            <div class="section-header"><span class="section-title">Base nutricional</span></div>
+            <div class="search-results" style="margin-bottom:12px;">
+              ${genericMatches.map(product => `
+                <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                  <div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,0.05);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">${product.icon || '🍽️'}</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                    <div class="search-result-brand">${product.brand || ''} ${getPortionReference(product) ? `· ${getPortionReference(product)}` : ''}</div>
+                  </div>
+                  <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${prioritizeCuratedResults && curatedMatches.length > 0 ? `
+            <div class="section-header"><span class="section-title">Catálogo Cal-IA</span></div>
+            <div class="search-results" style="margin-bottom:12px;">
+              ${curatedMatches.map(product => `
+                <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                  ${renderResultThumb(product, product.icon || '🛒', 'rgba(0,206,201,0.10)')}
+                  <div style="flex:1;min-width:0">
+                    <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                    <div class="search-result-brand">${product.brand || 'Catálogo'} ${getPortionReference(product) ? `· ${getPortionReference(product)}` : ''}</div>
+                  </div>
+                  <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${onlineMatches.length > 0 ? `
+            <div class="section-header"><span class="section-title">Resultados web</span></div>
+            <div class="search-results" style="margin-bottom:12px;">
+              ${onlineMatches.map(product => `
+                <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                  ${renderResultThumb(product, '🍽️', 'rgba(255,255,255,0.05)')}
+                  <div style="flex:1;min-width:0">
+                    <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                    <div class="search-result-brand">${product.brand || ''} ${product.protein ? `· P:${Math.round(product.protein)}g` : ''}</div>
+                  </div>
+                  <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${aiMatches.length > 0 ? `
+            <div class="section-header"><span class="section-title">Coincidencias web IA</span></div>
+            <div class="search-results" style="margin-bottom:12px;">
+              ${aiMatches.map(product => `
+                <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                  ${renderResultThumb(product, '🌐', 'rgba(0,206,201,0.10)')}
+                  <div style="flex:1;min-width:0">
+                    <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                    <div class="search-result-brand">${product.brand || 'Web'} ${product.protein ? `· P:${Math.round(product.protein)}g` : ''}</div>
+                  </div>
+                  <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${!prioritizeCuratedResults && curatedMatches.length > 0 ? `
+            <div class="section-header"><span class="section-title">Catálogo Cal-IA</span></div>
+            <div class="search-results" style="margin-bottom:12px;">
+              ${curatedMatches.map(product => `
+                <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                  ${renderResultThumb(product, product.icon || '🛒', 'rgba(0,206,201,0.10)')}
+                  <div style="flex:1;min-width:0">
+                    <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                    <div class="search-result-brand">${product.brand || 'Catálogo'} ${getPortionReference(product) ? `· ${getPortionReference(product)}` : ''}</div>
+                  </div>
+                  <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${!prioritizeGenericResults && genericMatches.length > 0 ? `
+            <div class="section-header"><span class="section-title">Base nutricional</span></div>
+            <div class="search-results" style="margin-bottom:12px;">
+              ${genericMatches.map(product => `
+                <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                  <div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,0.05);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">${product.icon || '🍽️'}</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                    <div class="search-result-brand">${product.brand || ''} ${getPortionReference(product) ? `· ${getPortionReference(product)}` : ''}</div>
+                  </div>
+                  <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${localMatches.length > 0 ? `
+            ${localMatches.length > 0 ? `
+              <div class="section-header" style="margin-top:4px"><span class="section-title">Tus alimentos</span></div>
+              <div class="search-results" style="margin-bottom:12px;">
+                ${localMatches.map(food => `
+                  <div class="search-result-item" data-local-food='${JSON.stringify(food)}'>
+                    <div style="flex:1;min-width:0">
+                      <div class="search-result-name">${food.name}</div>
+                      <div class="search-result-brand">
+                        ${food.brand ? `${food.brand} · ` : ''}${formatServingDisplay(food)}${getPortionReference(food) ? ` · ${getPortionReference(food)}` : ''}
+                      </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                      <span style="font-size:10px;font-weight:800;padding:4px 8px;border-radius:999px;background:${food.__matchSource === 'favorite' ? 'rgba(0,206,201,0.14)' : 'rgba(255,255,255,0.08)'};color:${food.__matchSource === 'favorite' ? 'var(--accent)' : 'var(--text-secondary)'};">
+                        ${food.__matchSource === 'favorite' ? 'TÍPICA' : 'RECIENTE'}
+                      </span>
+                      <span class="search-result-kcal">${Math.round(food.calories)} kcal</span>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+          ` : ''}
+          ${onlineMatches.length === 0 && aiMatches.length === 0 && curatedMatches.length === 0 && genericMatches.length === 0 && localMatches.length > 0 ? `
+            <div class="text-center text-secondary" style="padding:4px 8px 0;font-size:12px;">
+              No encontré coincidencias claras en la web, pero sí en tus alimentos guardados.
+            </div>
+          ` : ''}
+        `;
+
+        bindZoomableImages(resultsDiv);
+        bindLocalResultClicks(resultsDiv);
+        bindResultClicks(resultsDiv);
       } catch (err) {
+        if (requestId !== activeSearchRequest) return;
+
+        if (localMatches.length > 0 || baseCuratedMatches.length > 0 || baseGenericMatches.length > 0) {
+          const prioritizeGenericResults = isLikelyGenericSearch(trimmedQuery) && baseGenericMatches.length > 0;
+          const prioritizeCuratedResults = isLikelyCuratedCatalogSearch(trimmedQuery) && baseCuratedMatches.length > 0;
+          resultsDiv.innerHTML = `
+            ${prioritizeGenericResults && baseGenericMatches.length > 0 ? `
+              <div class="section-header"><span class="section-title">Base nutricional</span></div>
+              <div class="search-results" style="margin-bottom:12px;">
+                ${baseGenericMatches.map(product => `
+                  <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                    <div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,0.05);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">${product.icon || '🍽️'}</div>
+                    <div style="flex:1;min-width:0">
+                      <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                      <div class="search-result-brand">${product.brand || ''} ${getPortionReference(product) ? `· ${getPortionReference(product)}` : ''}</div>
+                    </div>
+                    <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+            ${prioritizeCuratedResults && baseCuratedMatches.length > 0 ? `
+              <div class="section-header"><span class="section-title">Catálogo Cal-IA</span></div>
+              <div class="search-results" style="margin-bottom:12px;">
+                ${baseCuratedMatches.map(product => `
+                  <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                    ${renderResultThumb(product, product.icon || '🛒', 'rgba(0,206,201,0.10)')}
+                    <div style="flex:1;min-width:0">
+                      <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                      <div class="search-result-brand">${product.brand || 'Catálogo'} ${getPortionReference(product) ? `· ${getPortionReference(product)}` : ''}</div>
+                    </div>
+                    <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+            ${!prioritizeCuratedResults && baseCuratedMatches.length > 0 ? `
+              <div class="section-header"><span class="section-title">Catálogo Cal-IA</span></div>
+              <div class="search-results" style="margin-bottom:12px;">
+                ${baseCuratedMatches.map(product => `
+                  <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                    ${renderResultThumb(product, product.icon || '🛒', 'rgba(0,206,201,0.10)')}
+                    <div style="flex:1;min-width:0">
+                      <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                      <div class="search-result-brand">${product.brand || 'Catálogo'} ${getPortionReference(product) ? `· ${getPortionReference(product)}` : ''}</div>
+                    </div>
+                    <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+            ${!prioritizeGenericResults && baseGenericMatches.length > 0 ? `
+              <div class="section-header"><span class="section-title">Base nutricional</span></div>
+              <div class="search-results" style="margin-bottom:12px;">
+                ${baseGenericMatches.map(product => `
+                  <div class="search-result-item" style="display:flex;align-items:center;gap:10px;" data-product='${JSON.stringify(product)}'>
+                    <div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,0.05);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">${product.icon || '🍽️'}</div>
+                    <div style="flex:1;min-width:0">
+                      <div class="search-result-name truncate">${product.name || 'Sin nombre'}</div>
+                      <div class="search-result-brand">${product.brand || ''} ${getPortionReference(product) ? `· ${getPortionReference(product)}` : ''}</div>
+                    </div>
+                    <span class="search-result-kcal">${Math.round(product.calories || 0)}</span>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+            <div class="section-header" style="margin-top:4px"><span class="section-title">Tus alimentos</span></div>
+            <div class="search-results" style="margin-bottom:12px;">
+              ${localMatches.map(food => `
+                <div class="search-result-item" data-local-food='${JSON.stringify(food)}'>
+                  <div style="flex:1;min-width:0">
+                    <div class="search-result-name">${food.name}</div>
+                    <div class="search-result-brand">
+                      ${food.brand ? `${food.brand} · ` : ''}${formatServingDisplay(food)}${getPortionReference(food) ? ` · ${getPortionReference(food)}` : ''}
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                    <span style="font-size:10px;font-weight:800;padding:4px 8px;border-radius:999px;background:${food.__matchSource === 'favorite' ? 'rgba(0,206,201,0.14)' : 'rgba(255,255,255,0.08)'};color:${food.__matchSource === 'favorite' ? 'var(--accent)' : 'var(--text-secondary)'};">
+                      ${food.__matchSource === 'favorite' ? 'TÍPICA' : 'RECIENTE'}
+                    </span>
+                    <span class="search-result-kcal">${Math.round(food.calories)} kcal</span>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+            <div class="text-center text-secondary" style="padding:4px 8px 0;font-size:12px;">No pude cargar la web ahora, pero sí encontré coincidencias útiles en tu app.</div>
+          `;
+          bindZoomableImages(resultsDiv);
+          bindResultClicks(resultsDiv);
+          bindLocalResultClicks(resultsDiv);
+          return;
+        }
+
         resultsDiv.innerHTML = '<div class="text-center text-secondary" style="padding:20px">Error de búsqueda. Verifica tu conexión.</div>';
       }
     }, 400);
@@ -314,9 +1018,26 @@ export function renderScanner(container, { navigateTo, mealSlotId, isSupplement,
 
   function bindResultClicks(container) {
     container.querySelectorAll('[data-product]').forEach(el => {
-      el.addEventListener('click', () => {
+      el.addEventListener('click', (event) => {
+        if (event.target.closest('[data-photo-zoom]')) return;
         const product = JSON.parse(el.dataset.product);
         openConfirm({ ...product, source: 'search' });
+      });
+    });
+  }
+
+  function bindLocalResultClicks(container) {
+    container.querySelectorAll('[data-local-food]').forEach(el => {
+      el.addEventListener('click', () => {
+        const parsed = JSON.parse(el.dataset.localFood);
+        const { __searchScore, __matchSource, ...food } = parsed;
+
+        if (__matchSource === 'favorite' && mealSlotId && !isCreatingTypical && !isSupplement) {
+          quickAddTypicalFood(food);
+          return;
+        }
+
+        openConfirm({ ...food, source: 'search' });
       });
     });
   }
@@ -381,8 +1102,9 @@ export function renderScanner(container, { navigateTo, mealSlotId, isSupplement,
     // ========== PHASE 2: AI Google Search fallback ==========
     const keyInfo = storage.getActiveApiKeyInfo();
     const apiKey = keyInfo ? keyInfo.key : '';
+    const hasAiAccess = storage.hasActiveAiAccess();
 
-    if (!apiKey) {
+    if (!hasAiAccess) {
       showNotFoundUI(code, false);
       return;
     }
@@ -457,11 +1179,10 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
 
 
   function renderPhotoTab() {
-    const keyInfo = storage.getActiveApiKeyInfo();
-    const apiKey = keyInfo ? keyInfo.key : '';
+    const hasAiAccess = storage.hasActiveAiAccess();
     content.innerHTML = `
       <div class="card-glass" style="text-align:center;padding:var(--space-lg)">
-        ${!apiKey ? `
+        ${!hasAiAccess ? `
           <div class="empty-state">
             <div class="empty-state-icon">🔑</div>
             <div class="empty-state-title">API Key necesaria</div>
@@ -485,134 +1206,161 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
   }
 
   async function handlePhotoCapture(e) {
-    const file = e.target.files[0];
+    const input = e.target;
+    const file = input.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const base64 = ev.target.result;
-      const preview = content.querySelector('#photo-preview');
+    const preview = content.querySelector('#photo-preview');
+
+    if (preview) {
       preview.innerHTML = `
-        <img src="${base64}" style="width:100%;border-radius:var(--radius-md);margin-bottom:var(--space-md)" />
         <div class="ai-loading" style="text-align:center;padding:20px;">
           <div class="ai-loading-spinner" style="width:36px;height:36px;margin:0 auto 12px;"></div>
-          <div class="ai-loading-text" style="font-weight:800;color:white;font-size:15px;">Analizando foto e identificando todos los alimentos y porciones...</div>
-          <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;">Esto puede tomar unos segundos ⏳</div>
+          <div class="ai-loading-text" style="font-weight:800;color:white;font-size:15px;">Preparando foto...</div>
+          <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;">La estamos ajustando para que suba bien</div>
         </div>
       `;
-      try {
-        if (isSupplement) {
-          const result = await analyzeImageWithAI(base64, true);
-          if (result && result.supplements && result.supplements.length > 0) {
-            result.supplements.forEach(s => {
-              openConfirm({
-                name: s.name || 'Suplemento IA',
-                serving: s.serving || '1 dosis',
-                calories: s.calories || 0,
-                protein: s.protein || 0
-              });
+    }
+
+    try {
+      const prepared = await prepareImageUpload(file, {
+        maxWidth: 1600,
+        maxHeight: 1600,
+        quality: 0.82
+      });
+      const base64 = prepared.dataUrl;
+
+      if (preview) {
+        preview.innerHTML = `
+          <button id="photo-preview-open" type="button" style="display:block;width:100%;padding:0;border:none;background:none;cursor:zoom-in;">
+            <img src="${base64}" style="width:100%;border-radius:var(--radius-md);margin-bottom:8px" />
+          </button>
+          <div style="font-size:12px;color:var(--text-tertiary);text-align:center;margin-bottom:var(--space-md);">Toca la foto para verla grande</div>
+          <div class="ai-loading" style="text-align:center;padding:20px;">
+            <div class="ai-loading-spinner" style="width:36px;height:36px;margin:0 auto 12px;"></div>
+            <div class="ai-loading-text" style="font-weight:800;color:white;font-size:15px;">Analizando foto e identificando todos los alimentos y porciones...</div>
+            <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;">Esto puede tomar unos segundos ⏳</div>
+          </div>
+        `;
+        preview.querySelector('#photo-preview-open')?.addEventListener('click', () => {
+          openImageLightbox(base64, {
+            downloadName: `calia-foto-${Date.now()}.jpg`
+          });
+        });
+      }
+
+      if (isSupplement) {
+        const result = await analyzeImageWithAI(base64, true, prepared.mimeType);
+        if (result && result.supplements && result.supplements.length > 0) {
+          result.supplements.forEach(s => {
+            openConfirm({
+              name: s.name || 'Suplemento IA',
+              serving: s.serving || '1 dosis',
+              calories: s.calories || 0,
+              protein: s.protein || 0
             });
-          } else {
-            showToast('No se detectó un suplemento', 'error');
-            preview.innerHTML = '';
-          }
+          });
+        } else {
+          showToast('No se detectó un suplemento', 'error');
+          if (preview) preview.innerHTML = '';
+        }
+        return;
+      }
+
+      const result = await analyzeImageWithAI(base64, false, prepared.mimeType);
+      if (result && result.foods && result.foods.length > 0) {
+        if (isCreatingTypical) {
+          const combined = result.foods.reduce((acc, food) => {
+            const grams = food.estimated_grams || 0;
+            acc.calories += ((food.calories_per_100g || 0) * grams) / 100;
+            acc.protein += ((food.protein_per_100g || 0) * grams) / 100;
+            acc.carbs += ((food.carbs_per_100g || 0) * grams) / 100;
+            acc.fat += ((food.fat_per_100g || 0) * grams) / 100;
+            acc.servingSize += grams;
+            return acc;
+          }, {
+            name: result.foods.map(food => food.name).join(' + '),
+            calories: 0,
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+            servingSize: 0
+          });
+
+          openConfirm({
+            ...combined,
+            servingUnit: 'g',
+            source: 'photo_ai',
+            photoUrl: base64,
+            aiConfidence: result.confidence || 'medium'
+          });
+          if (preview) preview.innerHTML = '';
           return;
         }
 
-        const result = await analyzeImageWithAI(base64, false);
-        if (result && result.foods && result.foods.length > 0) {
-          if (isCreatingTypical) {
-            const combined = result.foods.reduce((acc, food) => {
-              const grams = food.estimated_grams || 0;
-              acc.calories += ((food.calories_per_100g || 0) * grams) / 100;
-              acc.protein += ((food.protein_per_100g || 0) * grams) / 100;
-              acc.carbs += ((food.carbs_per_100g || 0) * grams) / 100;
-              acc.fat += ((food.fat_per_100g || 0) * grams) / 100;
-              acc.servingSize += grams;
-              return acc;
-            }, {
-              name: result.foods.map(food => food.name).join(' + '),
-              calories: 0,
-              protein: 0,
-              carbs: 0,
-              fat: 0,
-              servingSize: 0
-            });
-
-            openConfirm({
-              ...combined,
-              servingUnit: 'g',
-              source: 'photo_ai',
-              photoUrl: base64,
-              aiConfidence: result.confidence || 'medium'
-            });
-            preview.innerHTML = '';
-            return;
-          }
-
-          // Auto-guess meal slot if not provided
-          let targetSlotId = mealSlotId;
-          if (!targetSlotId) {
-            const hour = new Date().getHours();
-            if (hour < 11) targetSlotId = 'desayuno';
-            else if (hour < 15) targetSlotId = 'almuerzo';
-            else if (hour < 19) targetSlotId = 'colacion_pm';
-            else if (hour < 22) targetSlotId = 'cena';
-            else targetSlotId = 'colacion_nocturna';
-          }
-
-          const groupId = 'grp_' + Date.now();
-          result.foods.forEach((f, idx) => {
-            const entry = {
-              name: f.name,
-              calories: (f.calories_per_100g || 0) * (f.estimated_grams || 100) / 100,
-              protein: (f.protein_per_100g || 0) * (f.estimated_grams || 100) / 100,
-              carbs: (f.carbs_per_100g || 0) * (f.estimated_grams || 100) / 100,
-              fat: (f.fat_per_100g || 0) * (f.estimated_grams || 100) / 100,
-              source: 'photo_ai',
-              aiConfidence: result.confidence || 'medium',
-              servingSize: f.estimated_grams || 0,
-              servingUnit: 'g',
-              mealSlotId: targetSlotId,
-              groupId: groupId
-            };
-            if (idx === 0) entry.photoUrl = base64;
-            storage.addEntry(entry);
-          });
-
-          if (storage.getSettings().savePhotos) {
-            downloadBase64Image(base64, `calia-foto-${Date.now()}.jpg`);
-          }
-
-          const summaryNames = result.foods.map(f => f.name).join(', ');
-          showToast('✓ Registrado: ' + summaryNames, 'success');
-          navigateTo('dashboard', { selectedDate });
-        } else {
-          showToast('No se pudo analizar la imagen', 'error');
-          preview.innerHTML = '';
+        // Auto-guess meal slot if not provided
+        let targetSlotId = mealSlotId;
+        if (!targetSlotId) {
+          const hour = new Date().getHours();
+          if (hour < 11) targetSlotId = 'desayuno';
+          else if (hour < 15) targetSlotId = 'almuerzo';
+          else if (hour < 19) targetSlotId = 'colacion_pm';
+          else if (hour < 22) targetSlotId = 'cena';
+          else targetSlotId = 'colacion_nocturna';
         }
-      } catch (err) {
-        showToast('Error: ' + err.message, 'error');
-        console.error('AI error:', err);
+
+        const groupId = 'grp_' + Date.now();
+        result.foods.forEach((f, idx) => {
+          const entry = {
+            name: f.name,
+            calories: (f.calories_per_100g || 0) * (f.estimated_grams || 100) / 100,
+            protein: (f.protein_per_100g || 0) * (f.estimated_grams || 100) / 100,
+            carbs: (f.carbs_per_100g || 0) * (f.estimated_grams || 100) / 100,
+            fat: (f.fat_per_100g || 0) * (f.estimated_grams || 100) / 100,
+            source: 'photo_ai',
+            aiConfidence: result.confidence || 'medium',
+            servingSize: f.estimated_grams || 0,
+            servingUnit: 'g',
+            mealSlotId: targetSlotId,
+            groupId: groupId
+          };
+          if (idx === 0) entry.photoUrl = base64;
+          storage.addEntry(entry);
+        });
+
+        if (storage.getSettings().savePhotos) {
+          downloadBase64Image(base64, `calia-foto-${Date.now()}.jpg`);
+        }
+
+        const summaryNames = result.foods.map(f => f.name).join(', ');
+        showToast('✓ Registrado: ' + summaryNames, 'success');
+        navigateTo('dashboard', { selectedDate });
+      } else {
+        showToast('No se pudo analizar la imagen', 'error');
+        if (preview) preview.innerHTML = '';
+      }
+    } catch (err) {
+      const friendlyMessage = toFriendlyImageError(err, 'No pudimos procesar esa foto.');
+      showToast('Error: ' + friendlyMessage, 'error');
+      console.error('AI error:', err);
+      if (preview) {
         preview.innerHTML = `<button class="btn btn-ghost" onclick="document.getElementById('photo-input').click()">Intentar de nuevo</button>`;
       }
-    };
-    reader.readAsDataURL(file);
+    } finally {
+      input.value = '';
+    }
   }
 
-  async function analyzeImageWithAI(base64Image, isSupplement = false) {
+  async function analyzeImageWithAI(base64Image, isSupplement = false, mimeType = 'image/jpeg') {
     const keyInfo = storage.getActiveApiKeyInfo();
     const provider = keyInfo ? keyInfo.provider : 'gemini';
     const apiKey = keyInfo ? keyInfo.key : '';
+    const hasAiAccess = storage.hasActiveAiAccess();
 
-    if (!apiKey) throw new Error('Por favor configura tu API Key en el Perfil');
+    if (!hasAiAccess) throw new Error('Por favor configura tu API Key en el Perfil');
 
-    // Validate base64 image data
-    let imageData = '';
-    if (base64Image && base64Image.includes(',')) {
-      imageData = base64Image.split(',')[1];
-    } else if (base64Image && base64Image.length > 100) {
-      imageData = base64Image;
-    }
+    const payload = extractBase64ImagePayload(base64Image);
+    const imageData = payload.imageData;
+    const safeMimeType = payload.mimeType || mimeType || 'image/jpeg';
     if (!imageData || imageData.length < 50) {
       throw new Error('La imagen no se pudo procesar correctamente. Intenta tomar la foto de nuevo.');
     }
@@ -621,13 +1369,11 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
       ? `Actúa como un experto en nutrición y suplementación deportiva. Analiza la etiqueta o producto en esta foto.\nIdentifica el suplemento (ej. Creatina, Whey Protein, Magnesio, Omega 3, etc.).\nExtrae la porción sugerida por toma (ej. 1 scoop, 5g, 2 cápsulas).\nEstima las calorías y gramos de proteína por toma (si es creatina/vitaminas/minerales son 0).\n\nResponde SOLO con JSON válido en este formato exacto:\n{"supplements":[{"name":"...","serving":"...","calories":0,"protein":0}]}`
       : `Actúa como un nutricionista experto. Analiza esta foto de comida.\nPaso 1: Identifica los alimentos visibles.\nPaso 2: Estima la porción REAL servida en gramos (g). REGLA: Nunca asumas 100g por defecto. Un plato normal lleno pesa entre 250g y 450g. Un tazón o vaso son 200ml-350ml.\nPaso 3: Estima las calorías y macronutrientes POR CADA 100 GRAMOS de ese alimento.\n\nResponde SOLO con JSON válido en este formato exacto, sin markdown extra:\n{"foods":[{"name":"...","estimated_grams":0,"calories_per_100g":0,"protein_per_100g":0,"carbs_per_100g":0,"fat_per_100g":0}],"confidence":"high|medium|low"}`;
 
-    const res = await fetch('/api/ai', {
+    const { response: res, data } = await fetchJsonSafe('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, apiKey, prompt, imageData })
+      body: JSON.stringify({ provider, apiKey, prompt, imageData, mimeType: safeMimeType })
     });
-
-    const data = await res.json();
     if (!res.ok) {
       const errMsg = (data.error || '').toLowerCase();
       if (errMsg.includes('quota') || errMsg.includes('rate_limit') || errMsg.includes('resource_exhausted') || errMsg.includes('429')) {

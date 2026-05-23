@@ -1,6 +1,6 @@
 // ===== CALIA WATER PHOTO ESTIMATOR MODAL =====
 import { storage } from '../services/storage.js';
-import { showToast } from '../utils/helpers.js';
+import { showToast, prepareImageUpload, extractBase64ImagePayload, fetchJsonSafe, toFriendlyImageError, openImageLightbox } from '../utils/helpers.js';
 
 export function openWaterPhotoModal({ dateStr, onSave }) {
   const existing = document.getElementById('water-photo-wrapper');
@@ -13,6 +13,7 @@ export function openWaterPhotoModal({ dateStr, onSave }) {
   const keyInfo = storage.getActiveApiKeyInfo();
   const provider = keyInfo ? keyInfo.provider : 'gemini';
   const apiKey = keyInfo ? keyInfo.key : '';
+  const hasAiAccess = storage.hasActiveAiAccess();
 
   function render() {
     wrapper.innerHTML = `
@@ -26,7 +27,7 @@ export function openWaterPhotoModal({ dateStr, onSave }) {
           Saca una foto a tu vaso, taza o botella de agua. La IA estimará los mililitros (ml) restantes.
         </p>
 
-        ${!apiKey ? `
+        ${!hasAiAccess ? `
           <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);padding:14px;border-radius:16px;margin-bottom:16px;font-size:13px;color:#FCA5A5;">
             ⚠️ Se necesita configurar una API Key en Perfil para usar esta función.
           </div>
@@ -63,7 +64,8 @@ export function openWaterPhotoModal({ dateStr, onSave }) {
   }
 
   async function handlePhoto(e) {
-    const file = e.target.files[0];
+    const input = e.target;
+    const file = input.files[0];
     if (!file) return;
 
     const preview = wrapper.querySelector('#water-photo-preview');
@@ -71,33 +73,38 @@ export function openWaterPhotoModal({ dateStr, onSave }) {
     const loader = wrapper.querySelector('#water-loader');
     const inputContainer = wrapper.querySelector('#water-input-container');
 
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const base64 = ev.target.result;
+    try {
+      const prepared = await prepareImageUpload(file, {
+        maxWidth: 1600,
+        maxHeight: 1600,
+        quality: 0.82
+      });
+      const base64 = prepared.dataUrl;
+
       img.src = base64;
+      img.onclick = () => openImageLightbox(base64, { downloadName: `calia-agua-${Date.now()}.jpg` });
       preview.style.display = 'block';
       loader.style.display = 'block';
       if (inputContainer) inputContainer.style.display = 'none';
 
-      try {
-        const result = await analyzeWaterWithAI(base64);
-        if (result && result.amount) {
-          const amount = parseInt(result.amount) || 250;
-          const note = result.note || 'Agua estimada por Foto IA';
-          storage.addWaterEntry(amount, note, dateStr, 'photo_ai');
-          showToast(`💧 Registrado: +${amount} ml (${note})`, 'success');
-          wrapper.remove();
-          if (onSave) onSave();
-        } else {
-          showToast('No se pudo estimar el agua', 'error');
-          reset();
-        }
-      } catch (err) {
-        showToast('Error analizando la foto: ' + err.message, 'error');
+      const result = await analyzeWaterWithAI(base64, prepared.mimeType);
+      if (result && result.amount) {
+        const amount = parseInt(result.amount) || 250;
+        const note = result.note || 'Agua estimada por Foto IA';
+        storage.addWaterEntry(amount, note, dateStr, 'photo_ai');
+        showToast(`💧 Registrado: +${amount} ml (${note})`, 'success');
+        wrapper.remove();
+        if (onSave) onSave();
+      } else {
+        showToast('No se pudo estimar el agua', 'error');
         reset();
       }
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      showToast('Error analizando la foto: ' + toFriendlyImageError(err), 'error');
+      reset();
+    } finally {
+      input.value = '';
+    }
   }
 
   function reset() {
@@ -109,17 +116,22 @@ export function openWaterPhotoModal({ dateStr, onSave }) {
     if (inputContainer) inputContainer.style.display = 'block';
   }
 
-  async function analyzeWaterWithAI(base64Image) {
-    const imageData = base64Image.split(',')[1];
+  async function analyzeWaterWithAI(base64Image, mimeType = 'image/jpeg') {
+    const payload = extractBase64ImagePayload(base64Image);
+    const imageData = payload.imageData;
+    const safeMimeType = payload.mimeType || mimeType || 'image/jpeg';
+
+    if (!imageData || imageData.length < 50) {
+      throw new Error('La imagen no se pudo procesar correctamente. Intenta tomar la foto de nuevo.');
+    }
+
     const prompt = `Actúa como un experto en visión artificial para nutrición e hidratación. Analiza la imagen de este vaso, taza o botella (por ejemplo marcas comerciales de agua embotellada como Cachantún, Benedictino, etc. o vasos comunes). Estima la cantidad de agua restante en mililitros (ml).\nResponde SOLO con JSON válido en este formato exacto, sin markdown extra ni texto adicional:\n{"amount": 250, "note": "Vaso de agua de vidrio lleno ~250ml"}`;
 
-    const res = await fetch('/api/ai', {
+    const { response: res, data } = await fetchJsonSafe('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, apiKey, prompt, imageData })
+      body: JSON.stringify({ provider, apiKey, prompt, imageData, mimeType: safeMimeType })
     });
-
-    const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Error en estimación');
 
     let text = data.text || '';

@@ -25,7 +25,9 @@ export function openTutorialModal({ onClose }) {
       desc: 'Visualiza en tiempo real tus calorías y macros. Toca cualquier alimento para editar sus gramos, o usa el Solver N-Alimentos para cuadrar tu porción de forma exacta.',
       visual: `
         <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:8px; margin:8px 0; display:flex; align-items:center; justify-content:space-around;">
-          <div style="width:36px; height:36px; border-radius:50%; border:3px solid var(--accent); border-top-color:transparent; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:800; color:white; animation:spin 3s linear infinite;">80%</div>
+          <div style="width:38px; height:38px; border-radius:50%; background:conic-gradient(var(--accent) 0 80%, rgba(255,255,255,0.10) 80% 100%); display:flex; align-items:center; justify-content:center; box-shadow:0 8px 18px rgba(0,206,201,0.16);">
+            <div style="width:28px; height:28px; border-radius:50%; background:var(--bg-secondary); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:800; color:var(--text-primary);">80%</div>
+          </div>
           <div style="text-align:left; font-size:10px;">
             <div style="color:var(--protein); font-weight:800;">● Prot: 120g / 150g</div>
             <div style="color:var(--carbs); font-weight:800;">● Carbs: 250g / 300g</div>

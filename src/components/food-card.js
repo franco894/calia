@@ -16,7 +16,7 @@ export function renderFoodCard(entry, opts = {}) {
   return `
     <div class="food-card" data-entry-id="${entry.id}">
       ${entry.photoUrl && !opts.hidePhoto
-        ? `<img class="food-card-photo" src="${entry.photoUrl}" alt="${entry.name}" />` 
+        ? `<img class="food-card-photo" src="${entry.photoUrl}" alt="${entry.name}" data-photo-zoom="${entry.photoUrl}" data-photo-download="calia-${entry.name || 'foto'}-${entry.id || Date.now()}.jpg" style="cursor:zoom-in;" />` 
         : ''
       }
       <div class="food-card-info">

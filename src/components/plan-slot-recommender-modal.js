@@ -152,10 +152,9 @@ export function openPlanSlotRecommenderModal(slot, { navigateTo, selectedDate })
   }
 
   function renderAITab() {
-    const keyInfo = storage.getActiveApiKeyInfo();
-    const apiKey = keyInfo ? keyInfo.key : '';
+    const hasAiAccess = storage.hasActiveAiAccess();
 
-    if (!apiKey) {
+    if (!hasAiAccess) {
       return `
         <div class="empty-state" style="padding: 32px 16px; text-align: center;">
           <div class="empty-state-icon" style="font-size: 40px; margin-bottom: 12px;">🔑</div>
@@ -425,8 +424,9 @@ export function openPlanSlotRecommenderModal(slot, { navigateTo, selectedDate })
       const keyInfo = storage.getActiveApiKeyInfo();
       const provider = keyInfo ? keyInfo.provider : 'gemini';
       const apiKey = keyInfo ? keyInfo.key : '';
+      const hasAiAccess = storage.hasActiveAiAccess();
 
-      if (!apiKey) {
+      if (!hasAiAccess) {
         showToast('Configura tu API Key en el Perfil para usar el Asistente IA', 'error');
         loadingAI = false;
         render();

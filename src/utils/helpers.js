@@ -214,3 +214,278 @@ export function downloadBase64Image(base64Data, filename) {
   link.click();
   document.body.removeChild(link);
 }
+
+function fitImageWithin(width, height, maxWidth, maxHeight) {
+  if (!width || !height) return { width: maxWidth, height: maxHeight };
+
+  let nextWidth = width;
+  let nextHeight = height;
+
+  if (nextWidth > maxWidth) {
+    nextHeight = Math.round(nextHeight * (maxWidth / nextWidth));
+    nextWidth = maxWidth;
+  }
+
+  if (nextHeight > maxHeight) {
+    nextWidth = Math.round(nextWidth * (maxHeight / nextHeight));
+    nextHeight = maxHeight;
+  }
+
+  return {
+    width: Math.max(1, Math.round(nextWidth)),
+    height: Math.max(1, Math.round(nextHeight))
+  };
+}
+
+/** Read an image file into a data URL */
+export function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('No pudimos leer esa foto.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('No pudimos abrir esa foto.'));
+    image.src = src;
+  });
+}
+
+async function maybeConvertHeicBlob(file, { outputType = 'image/jpeg', quality = 0.82 } = {}) {
+  const fileType = (file && file.type ? file.type : '').toLowerCase();
+  const fileName = (file && file.name ? file.name : '').toLowerCase();
+  const isHeic = fileType.includes('heic') || fileType.includes('heif') || fileName.endsWith('.heic') || fileName.endsWith('.heif');
+
+  if (!isHeic) return file;
+
+  try {
+    const { default: heic2any } = await import('heic2any');
+    const converted = await heic2any({
+      blob: file,
+      toType: outputType,
+      quality
+    });
+    return Array.isArray(converted) ? converted[0] : converted;
+  } catch (err) {
+    throw new Error('No pudimos convertir la foto HEIC del iPhone.');
+  }
+}
+
+async function loadImageDrawable(fileOrBlob) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(fileOrBlob);
+    } catch (err) {
+      // Fall through to object URL image loading.
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(fileOrBlob);
+  try {
+    return await loadImageElement(objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+/** Extract image mime type and raw base64 payload from a data URL */
+export function extractBase64ImagePayload(base64Image = '') {
+  const value = String(base64Image || '').trim();
+  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i);
+
+  if (match) {
+    return {
+      mimeType: match[1].toLowerCase(),
+      imageData: match[2].replace(/\s+/g, '')
+    };
+  }
+
+  if (value.length > 100 && !value.includes(',')) {
+    return {
+      mimeType: 'image/jpeg',
+      imageData: value.replace(/\s+/g, '')
+    };
+  }
+
+  return { mimeType: '', imageData: '' };
+}
+
+/** Normalize and compress a photo before preview/upload */
+export async function prepareImageUpload(file, opts = {}) {
+  const {
+    maxWidth = 1600,
+    maxHeight = 1600,
+    quality = 0.82,
+    outputType = 'image/jpeg',
+    background = '#ffffff'
+  } = opts;
+
+  if (!file) throw new Error('No se selecciono ninguna foto.');
+  if (!(file.type || '').startsWith('image/')) {
+    throw new Error('El archivo elegido no es una imagen.');
+  }
+
+  const workingBlob = await maybeConvertHeicBlob(file, { outputType, quality });
+  const image = await loadImageDrawable(workingBlob);
+  const { width, height } = fitImageWithin(
+    image.naturalWidth || image.width,
+    image.naturalHeight || image.height,
+    maxWidth,
+    maxHeight
+  );
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Tu navegador no pudo preparar la foto.');
+
+  if (outputType === 'image/jpeg') {
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  ctx.drawImage(image, 0, 0, width, height);
+  const dataUrl = canvas.toDataURL(outputType, quality);
+
+  if (typeof image.close === 'function') {
+    image.close();
+  }
+
+  const { mimeType, imageData } = extractBase64ImagePayload(dataUrl);
+
+  if (!mimeType || !imageData || imageData.length < 50) {
+    throw new Error('La foto no se pudo preparar correctamente.');
+  }
+
+  return {
+    dataUrl,
+    mimeType,
+    imageData,
+    width,
+    height,
+    originalType: file.type || mimeType
+  };
+}
+
+/** Fetch JSON safely, even when the server returns HTML or an empty body */
+export async function fetchJsonSafe(url, options = {}) {
+  const response = await fetch(url, options);
+  const rawText = await response.text();
+
+  if (!rawText) {
+    return { response, data: {}, rawText };
+  }
+
+  try {
+    return {
+      response,
+      data: JSON.parse(rawText),
+      rawText
+    };
+  } catch (err) {
+    const snippet = rawText.replace(/\s+/g, ' ').trim().slice(0, 140);
+    const looksLikeHtml = /^<!doctype|^<html|^<body|^<head/i.test(snippet);
+
+    if (!response.ok) {
+      throw new Error(
+        looksLikeHtml
+          ? `El servidor rechazo la foto (${response.status}). Prueba con una imagen mas liviana.`
+          : snippet || `Error del servidor (${response.status}).`
+      );
+    }
+
+    throw new Error('El servidor devolvio una respuesta invalida.');
+  }
+}
+
+/** Translate cryptic browser/image errors into something actionable */
+export function toFriendlyImageError(error, fallback = 'No pudimos procesar esa foto.') {
+  const message = (error && error.message ? error.message : '').trim();
+  const normalized = normalizeText(message);
+
+  if (!message) return fallback;
+  if (normalized.includes('string did not match the expected pattern')) {
+    return 'La foto no se pudo procesar asi como venia. Prueba con una imagen mas liviana o en JPG/PNG.';
+  }
+  if (normalized.includes('heic') || normalized.includes('heif')) {
+    return 'No pudimos convertir esa foto HEIC. Prueba con otra imagen o vuelve a intentarlo.';
+  }
+  if (normalized.includes('payload') || normalized.includes('too large') || normalized.includes('413')) {
+    return 'La foto es demasiado pesada. Prueba con una imagen mas liviana.';
+  }
+  if (normalized.includes('respuesta invalida del servidor') || normalized.includes('respuesta invalida')) {
+    return 'El servidor no pudo leer bien esa foto. Prueba con otra imagen o vuelve a tomarla.';
+  }
+  if (normalized.includes('rechazo la foto')) {
+    return 'La foto fue rechazada por el servidor. Prueba con una imagen mas liviana.';
+  }
+  if (normalized.includes('no pudimos abrir esa foto') || normalized.includes('decode')) {
+    return 'No pudimos abrir esa foto. Prueba con otra imagen o con una captura.';
+  }
+
+  return message;
+}
+
+/** Open image in a full-screen lightbox */
+export function openImageLightbox(imageSrc, opts = {}) {
+  if (!imageSrc) return;
+
+  const existing = document.getElementById('image-lightbox');
+  if (existing) existing.remove();
+
+  const wrapper = document.createElement('div');
+  wrapper.id = 'image-lightbox';
+  wrapper.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0;backdrop-filter:blur(10px);animation:fadeIn 0.2s ease-out;';
+
+  const showDownload = Boolean(opts.downloadName);
+  wrapper.innerHTML = `
+    <div style="width:100%;padding:16px;display:flex;justify-content:space-between;align-items:center;position:absolute;top:env(safe-area-inset-top);left:0;z-index:1;">
+      <button class="btn btn-ghost" id="image-lightbox-close" style="color:white;font-size:28px;padding:8px;line-height:1;">✕</button>
+      ${showDownload ? `
+        <button class="btn btn-sm" id="image-lightbox-download" style="background:var(--accent);color:black;font-weight:bold;border:none;border-radius:20px;padding:8px 16px;">
+          Descargar
+        </button>
+      ` : '<span></span>'}
+    </div>
+    <img src="${imageSrc}" style="max-width:95%;max-height:80%;object-fit:contain;border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,0.5);" />
+  `;
+
+  document.body.appendChild(wrapper);
+
+  wrapper.querySelector('#image-lightbox-close')?.addEventListener('click', () => wrapper.remove());
+  wrapper.addEventListener('click', (event) => {
+    if (event.target === wrapper) wrapper.remove();
+  });
+
+  if (showDownload) {
+    wrapper.querySelector('#image-lightbox-download')?.addEventListener('click', () => {
+      downloadBase64Image(imageSrc, opts.downloadName);
+      showToast('Descargando imagen...', 'info');
+    });
+  }
+}
+
+/** Bind click-to-zoom behavior for any element with data-photo-zoom */
+export function bindZoomableImages(root = document) {
+  root.querySelectorAll('[data-photo-zoom]').forEach(el => {
+    if (el.dataset.zoomBound === '1') return;
+    el.dataset.zoomBound = '1';
+
+    el.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const imageSrc = el.dataset.photoZoom || el.getAttribute('src') || '';
+      if (!imageSrc) return;
+
+      const downloadName = el.dataset.photoDownload || '';
+      openImageLightbox(imageSrc, downloadName ? { downloadName } : {});
+    });
+  });
+}

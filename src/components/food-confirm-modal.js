@@ -1,5 +1,5 @@
 // ===== CALIA FOOD CONFIRM MODAL =====
-import { fmt, downloadBase64Image, showToast, getPortionReference } from '../utils/helpers.js';
+import { fmt, openImageLightbox, getPortionReference } from '../utils/helpers.js';
 import { storage } from '../services/storage.js';
 
 function checkDietCompliance(diet, name, brand, ingredientsStr, carbs) {
@@ -259,26 +259,8 @@ export function showFoodConfirmModal(food, opts = {}) {
   const thumb = overlay.querySelector('#confirm-photo-thumb');
   if (thumb && food.photoUrl) {
     thumb.addEventListener('click', () => {
-      const viewer = document.createElement('div');
-      viewer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0;backdrop-filter:blur(10px);animation: fadeIn 0.2s ease-out;';
-      
-      viewer.innerHTML = `
-        <div style="width:100%;padding:16px;display:flex;justify-content:space-between;align-items:center;position:absolute;top:env(safe-area-inset-top);left:0;z-index:1">
-          <button class="btn btn-ghost" id="viewer-close" style="color:white;font-size:28px;padding:8px;line-height:1">✕</button>
-          <button class="btn btn-sm" id="viewer-download" style="background:var(--accent);color:black;font-weight:bold;border:none;border-radius:20px;padding:8px 16px;">
-            Descargar
-          </button>
-        </div>
-        <img src="${food.photoUrl}" style="max-width:95%;max-height:80%;object-fit:contain;border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,0.5);" />
-      `;
-      
-      document.body.appendChild(viewer);
-      
-      viewer.querySelector('#viewer-close').addEventListener('click', () => viewer.remove());
-      
-      viewer.querySelector('#viewer-download').addEventListener('click', () => {
-        downloadBase64Image(food.photoUrl, `calia-plato-${Date.now()}.jpg`);
-        showToast('Descargando imagen...', 'info');
+      openImageLightbox(food.photoUrl, {
+        downloadName: `calia-plato-${Date.now()}.jpg`
       });
     });
   }
