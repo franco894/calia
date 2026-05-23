@@ -671,4 +671,3 @@ function openInitialSetupModal(container, navigateTo, dateStr) {
     renderDashboard(container, { navigateTo, selectedDate: dateStr });
   });
 }
-}
