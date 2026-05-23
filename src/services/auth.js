@@ -66,6 +66,14 @@ class AuthService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: uid, displayName: displayName || uid, passwordHash })
       });
+
+      const contentType = response.headers.get('content-type') || '';
+
+      if (!contentType.includes('application/json')) {
+        console.error('[Auth] Register: Expected JSON but got:', contentType, 'status:', response.status);
+        return { ok: false, error: 'El servidor no respondió correctamente. Presiona 🔄 Actualizar App e intenta de nuevo.' };
+      }
+
       const data = await response.json();
       if (!response.ok) {
         return { ok: false, error: data.error || 'Error al registrar' };
@@ -76,7 +84,8 @@ class AuthService {
       await this.pullUserData(uid);
       return { ok: true, userId: uid };
     } catch (err) {
-      return { ok: false, error: 'Error de red al intentar registrar' };
+      console.error('[Auth] Register network error:', err);
+      return { ok: false, error: 'Sin conexión al servidor. Verifica tu internet e intenta de nuevo.' };
     }
   }
 
@@ -91,6 +100,15 @@ class AuthService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: uid, passwordHash })
       });
+
+      const contentType = response.headers.get('content-type') || '';
+
+      // If the server returned HTML instead of JSON, the API route isn't being reached
+      if (!contentType.includes('application/json')) {
+        console.error('[Auth] Expected JSON but got:', contentType, 'status:', response.status);
+        return { ok: false, error: 'El servidor no respondió correctamente. Presiona 🔄 Actualizar App e intenta de nuevo.' };
+      }
+
       const data = await response.json();
       if (!response.ok) {
         return { ok: false, error: data.error || 'Error al iniciar sesión' };
@@ -101,7 +119,8 @@ class AuthService {
       await this.pullUserData(uid);
       return { ok: true, userId: uid };
     } catch (err) {
-      return { ok: false, error: 'Error de red al intentar iniciar sesión' };
+      console.error('[Auth] Login network error:', err);
+      return { ok: false, error: 'Sin conexión al servidor. Verifica tu internet e intenta de nuevo.' };
     }
   }
 
