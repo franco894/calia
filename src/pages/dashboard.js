@@ -657,6 +657,7 @@ function openInitialSetupModal(container, navigateTo, dateStr) {
     wrapper.remove();
     localStorage.setItem(`calia_${userId}_plan_configured`, 'true');
     openCalculatorModal({
+      preventClose: true,
       onSave: () => {
         showToast('✨ Plan Científico Periodizado configurado con éxito', 'success');
         renderDashboard(container, { navigateTo, selectedDate: dateStr });

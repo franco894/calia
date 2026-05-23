@@ -47,7 +47,7 @@ export function openCalculatorModal(opts = {}) {
               <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px;">Calculadora Biométrica & Periodización</div>
             </div>
           </div>
-          <button class="btn btn-ghost" id="calc-close" style="padding:4px;font-size:24px;color:var(--text-tertiary);">✕</button>
+          ${opts.preventClose ? '' : '<button class="btn btn-ghost" id="calc-close" style="padding:4px;font-size:24px;color:var(--text-tertiary);">✕</button>'}
         </div>
 
         <!-- Progress Bar -->
