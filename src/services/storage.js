@@ -48,14 +48,36 @@ class StorageService {
   /** Initialize defaults for a new user (or on first load) */
   initUserDefaults(seedData = null) {
     const data = seedData || {};
+
+    const standardDayConfigs = [
+      {
+        id: 'diario',
+        name: 'Plan Diario',
+        days: [0, 1, 2, 3, 4, 5, 6],
+        calories: 2000,
+        protein: 120,
+        fat: 65,
+        carbs: 230,
+      }
+    ];
+
+    const standardMealSlots = {
+      'diario': [
+        { id: 'desayuno-d', name: 'Desayuno', time: '08:00', icon: '🌅' },
+        { id: 'almuerzo-d', name: 'Almuerzo', time: '13:00', icon: '☀️' },
+        { id: 'merienda-d', name: 'Merienda', time: '17:00', icon: '🍎' },
+        { id: 'cena-d', name: 'Cena', time: '20:00', icon: '🌙' },
+      ]
+    };
+
     if (!this._get('goals')) {
-      this._set('goals', data.goals || DEFAULT_GOALS);
+      this._set('goals', data.goals || { calories: 2000, protein: 120, carbs: 230, fat: 65, fiber: 30, water: 2500 });
     }
     if (!this._get('day_configs')) {
-      this._set('day_configs', data.dayConfigs || []);
+      this._set('day_configs', data.dayConfigs || standardDayConfigs);
     }
     if (!this._get('meal_slots')) {
-      this._set('meal_slots', data.mealSlots || {});
+      this._set('meal_slots', data.mealSlots || standardMealSlots);
     }
     if (!this._get('supplements')) {
       this._set('supplements', data.supplements || []);
@@ -240,31 +262,33 @@ class StorageService {
           if (changed) this._set('meal_slots', allSlots3);
         }
 
-        // Force add Electrolit to favorites if missing
-        let favs3 = this._get('favorite_foods');
-        if (Array.isArray(favs3)) {
-          const hasEl = favs3.some(f => (f.name || '').toLowerCase().includes('electrolit'));
-          if (!hasEl) {
-            favs3.push({
-              id: 'fav_electrolit',
-              name: 'Electrolit',
-              brand: 'Electrolit',
-              calories: 60, protein: 0, fat: 0, carbs: 15,
-              servingSize: 625, servingUnit: 'ml',
-              portionReference: '1 botella'
-            });
-            this._set('favorite_foods', favs3);
+        // Force add Electrolit to favorites if missing (only for Franco's profile)
+        if (auth.getCurrentUserId() === 'franco') {
+          let favs3 = this._get('favorite_foods');
+          if (Array.isArray(favs3)) {
+            const hasEl = favs3.some(f => (f.name || '').toLowerCase().includes('electrolit'));
+            if (!hasEl) {
+              favs3.push({
+                id: 'fav_electrolit',
+                name: 'Electrolit',
+                brand: 'Electrolit',
+                calories: 60, protein: 0, fat: 0, carbs: 15,
+                servingSize: 625, servingUnit: 'ml',
+                portionReference: '1 botella'
+              });
+              this._set('favorite_foods', favs3);
+            }
           }
-        }
 
-        // Force add Electrolit supplement if missing
-        const supps3 = this._get('supplements') || [];
-        const hasElSupp = supps3.some(s => (s.name || '').toLowerCase().includes('electrolit'));
-        if (!hasElSupp) {
-          const electrolitSupp = DEFAULT_SUPPLEMENTS.find(s => (s.name || '').toLowerCase().includes('electrolit'));
-          if (electrolitSupp) {
-            supps3.push({ ...electrolitSupp });
-            this._set('supplements', supps3);
+          // Force add Electrolit supplement if missing
+          const supps3 = this._get('supplements') || [];
+          const hasElSupp = supps3.some(s => (s.name || '').toLowerCase().includes('electrolit'));
+          if (!hasElSupp) {
+            const electrolitSupp = DEFAULT_SUPPLEMENTS.find(s => (s.name || '').toLowerCase().includes('electrolit'));
+            if (electrolitSupp) {
+              supps3.push({ ...electrolitSupp });
+              this._set('supplements', supps3);
+            }
           }
         }
 
