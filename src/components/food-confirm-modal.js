@@ -52,6 +52,19 @@ export function showFoodConfirmModal(food, opts = {}) {
   const saveButtonLabel = opts.saveButtonLabel || '✓ Guardar';
   const defaultPortionReference = food.portionReference || getPortionReference(food);
   
+  const currentHour = new Date().getHours();
+  let defaultSlotId = 'desayuno';
+  if (currentHour < 11) defaultSlotId = 'desayuno';
+  else if (currentHour < 15) defaultSlotId = 'almuerzo';
+  else if (currentHour < 19) defaultSlotId = 'colacion_pm';
+  else if (currentHour < 22) defaultSlotId = 'cena';
+  else defaultSlotId = 'colacion_nocturna';
+
+  let activeSlotId = opts.mealSlotId || defaultSlotId;
+  if (!mealSlots.some(s => s.id === activeSlotId)) {
+    activeSlotId = mealSlots[0]?.id || 'desayuno';
+  }
+
   overlay.classList.remove('hidden');
   overlay.innerHTML = `
     <div class="modal-sheet" id="food-confirm-sheet">
@@ -133,9 +146,9 @@ export function showFoodConfirmModal(food, opts = {}) {
           <label class="input-label">¿En qué comida?</label>
           <div class="confirm-slot-selector" id="confirm-slots">
             ${mealSlots.map((slot, i) => `
-              <label class="confirm-slot-option ${(opts.mealSlotId === slot.id || (!opts.mealSlotId && i === 0)) ? 'selected' : ''}" data-slot-id="${slot.id}">
+              <label class="confirm-slot-option ${(activeSlotId === slot.id) ? 'selected' : ''}" data-slot-id="${slot.id}">
                 <input type="radio" name="meal-slot" value="${slot.id}" 
-                  ${(opts.mealSlotId === slot.id || (!opts.mealSlotId && i === 0)) ? 'checked' : ''} />
+                  ${(activeSlotId === slot.id) ? 'checked' : ''} />
                 <span>${slot.icon || '🍽️'}</span>
                 <span style="flex:1">${slot.name}</span>
                 <span style="font-size:11px;color:var(--text-tertiary)">${slot.time}</span>
@@ -296,7 +309,7 @@ export function showFoodConfirmModal(food, opts = {}) {
       servingSize: parseFloat(overlay.querySelector('#confirm-serving').value) || 100,
       servingUnit: overlay.querySelector('#confirm-unit').value,
       portionReference: currentPortionReference(),
-      mealSlotId: selectedSlot ? selectedSlot.value : (opts.mealSlotId || null),
+      mealSlotId: selectedSlot ? selectedSlot.value : activeSlotId,
       source: food.source || 'manual',
       barcode: food.barcode || '',
       photoUrl: food.photoUrl || '',

@@ -405,6 +405,97 @@ export function renderDashboard(container, { navigateTo, selectedDate }) {
     });
   });
 
+  // Move combo slot handler
+  container.querySelectorAll('.combo-move-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const groupId = btn.dataset.groupId;
+      const groupItems = entries.filter(item => item.groupId === groupId);
+      if (groupItems.length === 0) return;
+
+      const overlay = document.getElementById('modal-overlay');
+      overlay.classList.remove('hidden');
+      
+      const currentSlotId = groupItems[0].mealSlotId;
+      const groupName = groupItems[0].groupName || 'Plato Combinado IA';
+
+      overlay.innerHTML = `
+        <div class="modal-sheet" id="combo-move-sheet">
+          <div class="modal-handle"></div>
+          
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+            <div style="font-size:28px;background:var(--accent);width:48px;height:48px;border-radius:16px;display:flex;align-items:center;justify-content:center;color:black;">⏰</div>
+            <div>
+              <h3 style="font-size:18px;font-weight:700;margin:0;color:white;">Mover Plato Combinado</h3>
+              <div style="font-size:12px;color:var(--text-tertiary);">Cambiar horario para todo el conjunto</div>
+            </div>
+          </div>
+
+          <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px 16px; border-radius:16px; margin-bottom:20px;">
+            <div style="font-size:11px; color:var(--text-tertiary); text-transform:uppercase; font-weight:800; letter-spacing:0.5px;">Plato Seleccionado</div>
+            <div style="font-weight:800; font-size:15px; color:white; margin-top:4px;">✨ ${groupName}</div>
+            <div style="font-size:12px; color:var(--accent); font-weight:700; margin-top:2px;">${groupItems.length} alimentos en total</div>
+          </div>
+
+          <div class="input-group mb-md" style="margin-bottom:24px">
+            <label class="input-label">Seleccionar nuevo horario</label>
+            <div class="confirm-slot-selector" id="combo-move-slots">
+              ${mealSlots.map((slot, i) => `
+                <label class="confirm-slot-option ${(currentSlotId === slot.id) ? 'selected' : ''}" data-slot-id="${slot.id}">
+                  <input type="radio" name="combo-meal-slot" value="${slot.id}" 
+                    ${(currentSlotId === slot.id) ? 'checked' : ''} />
+                  <span>${slot.icon || '🍽️'}</span>
+                  <span style="flex:1">${slot.name}</span>
+                  <span style="font-size:11px;color:var(--text-tertiary)">${slot.time}</span>
+                </label>
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="flex gap-sm">
+            <button class="btn btn-ghost btn-full" id="combo-move-cancel">Cancelar</button>
+            <button class="btn btn-accent btn-full" id="combo-move-save">✓ Mover Todo</button>
+          </div>
+        </div>
+      `;
+
+      // Selector animation/logic
+      overlay.querySelectorAll('.confirm-slot-option').forEach(opt => {
+        opt.addEventListener('click', () => {
+          overlay.querySelectorAll('.confirm-slot-option').forEach(o => o.classList.remove('selected'));
+          opt.classList.add('selected');
+          opt.querySelector('input').checked = true;
+        });
+      });
+
+      overlay.querySelector('#combo-move-cancel').addEventListener('click', () => {
+        overlay.classList.add('hidden');
+        overlay.innerHTML = '';
+      });
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          overlay.classList.add('hidden');
+          overlay.innerHTML = '';
+        }
+      });
+
+      overlay.querySelector('#combo-move-save').addEventListener('click', () => {
+        const selectedSlot = overlay.querySelector('input[name="combo-meal-slot"]:checked');
+        if (selectedSlot) {
+          const newSlotId = selectedSlot.value;
+          groupItems.forEach(item => {
+            storage.updateEntry(item.id, { mealSlotId: newSlotId });
+          });
+          showToast('✓ Horario actualizado para todo el plato', 'success');
+          overlay.classList.add('hidden');
+          overlay.innerHTML = '';
+          renderDashboard(container, { navigateTo, selectedDate: dateStr });
+        }
+      });
+    });
+  });
+
   // Water tracking event handlers
   container.querySelectorAll('.water-add-preset').forEach(btn => {
     btn.addEventListener('click', (e) => {

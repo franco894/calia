@@ -1278,7 +1278,7 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
             acc.servingSize += grams;
             return acc;
           }, {
-            name: result.foods.map(food => food.name).join(' + '),
+            name: result.dish_name || result.foods.map(food => food.name).join(' + '),
             calories: 0,
             protein: 0,
             carbs: 0,
@@ -1309,6 +1309,7 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
         }
 
         const groupId = 'grp_' + Date.now();
+        const groupName = result.dish_name || 'Plato Combinado IA';
         result.foods.forEach((f, idx) => {
           const entry = {
             name: f.name,
@@ -1321,7 +1322,8 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
             servingSize: f.estimated_grams || 0,
             servingUnit: 'g',
             mealSlotId: targetSlotId,
-            groupId: groupId
+            groupId: groupId,
+            groupName: groupName
           };
           if (idx === 0) entry.photoUrl = base64;
           storage.addEntry(entry);
@@ -1367,7 +1369,38 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
 
     const prompt = isSupplement
       ? `Actúa como un experto en nutrición y suplementación deportiva. Analiza la etiqueta o producto en esta foto.\nIdentifica el suplemento (ej. Creatina, Whey Protein, Magnesio, Omega 3, etc.).\nExtrae la porción sugerida por toma (ej. 1 scoop, 5g, 2 cápsulas).\nEstima las calorías y gramos de proteína por toma (si es creatina/vitaminas/minerales son 0).\n\nResponde SOLO con JSON válido en este formato exacto:\n{"supplements":[{"name":"...","serving":"...","calories":0,"protein":0}]}`
-      : `Actúa como un nutricionista experto. Analiza esta foto de comida.\nPaso 1: Identifica los alimentos visibles.\nPaso 2: Estima la porción REAL servida en gramos (g). REGLA: Nunca asumas 100g por defecto. Un plato normal lleno pesa entre 250g y 450g. Un tazón o vaso son 200ml-350ml.\nPaso 3: Estima las calorías y macronutrientes POR CADA 100 GRAMOS de ese alimento.\n\nResponde SOLO con JSON válido en este formato exacto, sin markdown extra:\n{"foods":[{"name":"...","estimated_grams":0,"calories_per_100g":0,"protein_per_100g":0,"carbs_per_100g":0,"fat_per_100g":0}],"confidence":"high|medium|low"}`;
+      : `Actúa como un nutricionista y antropometrista experto y científico de alta precisión. Analiza esta foto de comida y calcula el peso de los alimentos.
+
+Sigue rigurosamente estas pautas para estimar el peso real con máxima precisión y evitar la subestimación sistemática:
+
+1. ANÁLISIS DE VOLUMEN 3D Y DENSIDAD:
+   - Identifica el tamaño del plato/recipiente. Un plato de comida normal mide de 24 a 28 cm de diámetro.
+   - Observa la altura del montículo, las sombras y la superposición de los alimentos para entender el volumen tridimensional real.
+   - Evita la subestimación en carbohidratos densos como el arroz, pasta, papas, granos, carnes y legumbres. Estos alimentos son muy densos (peso específico de 0.8-0.9 g/cm³) y acumulan mucho peso en poco espacio visible desde arriba.
+   - CALIBRACIÓN FÍSICA CLAVE: 
+     * Si ves arroz cocido que ocupa una porción generosa del plato (ej. 1/3 o la mitad del plato) con cierta elevación o altura, pesa por lo menos entre 250g y 350g. Nunca estimes 150g para un plato lleno o montaña visible de arroz.
+     * Si ves pasta cocida servida como plato principal, estima entre 200g y 350g reales.
+     * Una porción de carne, pollo o pescado del tamaño de la palma de la mano con grosor estándar pesa entre 120g y 180g. Si es más gruesa o grande, sube a 200g-250g.
+     * Si el plato se ve abundante y lleno, la suma total de los alimentos debe rondar entre los 300g y 600g. ¡No subestimes!
+
+2. ASIGNACIÓN DE TÍTULO CREATIVO AL PLATO (dish_name):
+   - Genera un nombre descriptivo, gourmet y apetitoso en español para todo el plato combinado (ej. "Arroz con Pollo a la Plancha y Ensalada Mixta", "Spaghetti Bolognesa", "Bowl de Salmón con Quinoa", etc.). No uses nombres genéricos como "Plato Combinado". Debe ser específico de lo que detectas.
+
+Responde ÚNICAMENTE con un JSON válido que siga este formato exacto (sin bloques de código markdown, sin texto adicional, solo el JSON puro):
+{
+  "dish_name": "Nombre descriptivo y gourmet del plato en español",
+  "foods": [
+    {
+      "name": "Nombre del ingrediente/alimento individual en español",
+      "estimated_grams": 0,
+      "calories_per_100g": 0,
+      "protein_per_100g": 0,
+      "carbs_per_100g": 0,
+      "fat_per_100g": 0
+    }
+  ],
+  "confidence": "high|medium|low"
+}`;
 
     const { response: res, data } = await fetchJsonSafe('/api/ai', {
       method: 'POST',

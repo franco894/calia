@@ -70,15 +70,21 @@ export function renderMealSection(slot, entries = [], onAdd, onDelete) {
                 const photoUrl = photoItem ? photoItem.photoUrl : '';
                 const groupCalories = g.items.reduce((sum, item) => sum + (item.calories || 0), 0);
                 const groupProtein = g.items.reduce((sum, item) => sum + (item.protein || 0), 0);
+                const groupName = g.items[0]?.groupName || 'Plato Combinado IA';
 
                 return `
                   <div class="card-glass combo-container" style="border: 1px solid rgba(0,206,201,0.25); background: rgba(0,206,201,0.03); border-radius: 24px; padding: 12px; margin-bottom: var(--space-sm); display: flex; flex-direction: column; gap: 8px;">
-                    <div style="display:flex; gap:12px; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:10px;">
-                      ${photoUrl ? `<img src="${photoUrl}" data-photo-zoom="${photoUrl}" data-photo-download="calia-plato-combinado-${g.id}.jpg" style="width:52px; height:52px; border-radius:14px; object-fit:cover; border:1px solid rgba(255,255,255,0.15); cursor:zoom-in;" />` : ''}
-                      <div>
-                        <div style="font-weight:800; font-size:14px; color:white;">✨ Plato Combinado IA</div>
-                        <div style="font-size:11px; color:var(--accent); font-weight:700;">🔥 ${Math.round(groupCalories)} kcal (${Math.round(groupProtein)}g PRO)</div>
+                    <div style="display:flex; gap:12px; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:10px;">
+                      <div style="display:flex; gap:12px; align-items:center;">
+                        ${photoUrl ? `<img src="${photoUrl}" data-photo-zoom="${photoUrl}" data-photo-download="calia-plato-combinado-${g.id}.jpg" style="width:52px; height:52px; border-radius:14px; object-fit:cover; border:1px solid rgba(255,255,255,0.15); cursor:zoom-in;" />` : ''}
+                        <div>
+                          <div style="font-weight:800; font-size:14px; color:white;">✨ ${groupName}</div>
+                          <div style="font-size:11px; color:var(--accent); font-weight:700;">🔥 ${Math.round(groupCalories)} kcal (${Math.round(groupProtein)}g PRO)</div>
+                        </div>
                       </div>
+                      <button class="btn btn-ghost btn-sm combo-move-btn" data-group-id="${g.id}" style="padding:4px 8px; font-size:11px; font-weight:700; border-radius:8px; color:var(--accent); border:1px solid rgba(0,206,201,0.2); display:flex; align-items:center; gap:4px; background:rgba(0,206,201,0.05); height:26px; line-height:1;">
+                        ⏰ Mover
+                      </button>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:8px;">
                       ${g.items.map(item => renderFoodCard(item, { onDelete: true, showSource: true, hidePhoto: true })).join('')}
