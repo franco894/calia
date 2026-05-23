@@ -1241,15 +1241,26 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
       try {
         const result = await analyzeTextWithAI(textValue);
         if (result && result.foods && result.foods.length > 0) {
-          // Auto-guess meal slot if not provided
+          // Auto-guess closest meal slot from active slots if not provided
           let targetSlotId = mealSlotId;
           if (!targetSlotId) {
+            const mealSlots = storage.getMealSlotsForDate(selectedDate);
             const hour = new Date().getHours();
-            if (hour < 11) targetSlotId = 'desayuno';
-            else if (hour < 15) targetSlotId = 'almuerzo';
-            else if (hour < 19) targetSlotId = 'colacion_pm';
-            else if (hour < 22) targetSlotId = 'cena';
-            else targetSlotId = 'colacion_nocturna';
+            if (mealSlots && mealSlots.length > 0) {
+              let bestSlot = mealSlots[0];
+              let minDiff = Infinity;
+              mealSlots.forEach(s => {
+                const sHour = parseInt(s.time.split(':')[0]) || 0;
+                const diff = Math.abs(hour - sHour);
+                if (diff < minDiff) {
+                  minDiff = diff;
+                  bestSlot = s;
+                }
+              });
+              targetSlotId = bestSlot.id;
+            } else {
+              targetSlotId = 'desayuno';
+            }
           }
 
           const groupId = 'grp_' + Date.now();
@@ -1378,15 +1389,26 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
           return;
         }
 
-        // Auto-guess meal slot if not provided
+        // Auto-guess closest meal slot from active slots if not provided
         let targetSlotId = mealSlotId;
         if (!targetSlotId) {
+          const mealSlots = storage.getMealSlotsForDate(selectedDate);
           const hour = new Date().getHours();
-          if (hour < 11) targetSlotId = 'desayuno';
-          else if (hour < 15) targetSlotId = 'almuerzo';
-          else if (hour < 19) targetSlotId = 'colacion_pm';
-          else if (hour < 22) targetSlotId = 'cena';
-          else targetSlotId = 'colacion_nocturna';
+          if (mealSlots && mealSlots.length > 0) {
+            let bestSlot = mealSlots[0];
+            let minDiff = Infinity;
+            mealSlots.forEach(s => {
+              const sHour = parseInt(s.time.split(':')[0]) || 0;
+              const diff = Math.abs(hour - sHour);
+              if (diff < minDiff) {
+                minDiff = diff;
+                bestSlot = s;
+              }
+            });
+            targetSlotId = bestSlot.id;
+          } else {
+            targetSlotId = 'desayuno';
+          }
         }
 
         const groupId = 'grp_' + Date.now();

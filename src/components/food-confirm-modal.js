@@ -52,17 +52,24 @@ export function showFoodConfirmModal(food, opts = {}) {
   const saveButtonLabel = opts.saveButtonLabel || '✓ Guardar';
   const defaultPortionReference = food.portionReference || getPortionReference(food);
   
-  const currentHour = new Date().getHours();
-  let defaultSlotId = 'desayuno';
-  if (currentHour < 11) defaultSlotId = 'desayuno';
-  else if (currentHour < 15) defaultSlotId = 'almuerzo';
-  else if (currentHour < 19) defaultSlotId = 'colacion_pm';
-  else if (currentHour < 22) defaultSlotId = 'cena';
-  else defaultSlotId = 'colacion_nocturna';
-
-  let activeSlotId = opts.mealSlotId || defaultSlotId;
-  if (!mealSlots.some(s => s.id === activeSlotId)) {
-    activeSlotId = mealSlots[0]?.id || 'desayuno';
+  let activeSlotId = opts.mealSlotId;
+  if (!activeSlotId) {
+    const hour = new Date().getHours();
+    if (mealSlots && mealSlots.length > 0) {
+      let bestSlot = mealSlots[0];
+      let minDiff = Infinity;
+      mealSlots.forEach(s => {
+        const sHour = parseInt(s.time.split(':')[0]) || 0;
+        const diff = Math.abs(hour - sHour);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestSlot = s;
+        }
+      });
+      activeSlotId = bestSlot.id;
+    } else {
+      activeSlotId = 'desayuno';
+    }
   }
 
   overlay.classList.remove('hidden');
