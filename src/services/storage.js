@@ -48,6 +48,39 @@ class StorageService {
   /** Initialize defaults for a new user (or on first load) */
   initUserDefaults(seedData = null) {
     const data = seedData || {};
+    const userId = auth.getCurrentUserId();
+
+    // Force restore Franco's scientific periodized 5Componentes plan and winkler supplements
+    // if they got overwritten by the standard 2000 kcal blank slate.
+    if (userId === 'franco') {
+      const currentConfigs = this._get('day_configs') || [];
+      const hasStandardPlan = currentConfigs.some(c => c.id === 'diario');
+      const hasNoSupps = (this._get('supplements') || []).length <= 1;
+
+      if (hasStandardPlan || hasNoSupps || currentConfigs.length === 0) {
+        console.log("[Seed] Force restoring Franco's 5Componentes periodized plan and Winkler supplements...");
+        this.seedFrancoData();
+        return;
+      }
+
+      if (!this._get('goals')) {
+        this._set('goals', DEFAULT_GOALS);
+      }
+      if (!this._get('day_configs')) {
+        this._set('day_configs', DEFAULT_DAY_CONFIGS);
+      }
+      if (!this._get('meal_slots')) {
+        this._set('meal_slots', DEFAULT_MEAL_SLOTS);
+      }
+      if (!this._get('supplements')) {
+        this._set('supplements', DEFAULT_SUPPLEMENTS);
+      }
+      if (!this._get('food_entries')) {
+        this._set('food_entries', []);
+      }
+      this.runDataMigrations();
+      return;
+    }
 
     const standardDayConfigs = [
       {
