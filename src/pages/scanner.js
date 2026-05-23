@@ -1207,11 +1207,11 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
             <label class="input-label" style="font-size:12px; color:var(--text-secondary);">¿Qué comiste? (Descríbelo en una frase)</label>
             <style>
               #photo-text-input::placeholder {
-                color: rgba(255, 255, 255, 0.48) !important;
-                opacity: 1 !important;
+                color: var(--text-tertiary) !important;
+                opacity: 0.8 !important;
               }
             </style>
-            <textarea class="input" id="photo-text-input" placeholder="Ej: Me comí un croissant de jamón y queso de Starbucks y una Coca Cola Zero..." style="width:100%; height:72px; padding:10px 12px; font-size:14px; border-radius:14px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.18); color:white; resize:none;"></textarea>
+            <textarea class="input" id="photo-text-input" placeholder="Ej: Me comí un croissant de jamón y queso de Starbucks y una Coca Cola Zero..." style="width:100%; height:72px; padding:10px 12px; font-size:14px; border-radius:14px; background:var(--bg-input); border:1px solid var(--border); color:var(--text-primary); resize:none;"></textarea>
           </div>
           <button class="btn btn-ghost btn-full" id="photo-text-submit" style="font-weight:700; border-radius:14px; border:1px solid rgba(0,206,201,0.25); color:var(--accent); background:rgba(0,206,201,0.03); height:40px; display:flex; align-items:center; justify-content:center; gap:6px;">
             ✍️ Estimar con Texto IA
