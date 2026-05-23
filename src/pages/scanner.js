@@ -1192,10 +1192,25 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
         ` : `
           <div style="font-size:48px;margin-bottom:var(--space-md)">📸</div>
           <p class="text-sm text-secondary mb-md">Toma una foto de tu plato para estimar calorías con IA</p>
-          <label class="btn btn-accent btn-full" style="position:relative; overflow:hidden; display:block; padding:0; height:44px; line-height:44px; text-align:center;">
+          <label class="btn btn-accent btn-full" style="position:relative; overflow:hidden; display:block; padding:0; height:44px; line-height:44px; text-align:center; margin-bottom: 20px;">
             <span>Tomar Foto o Subir</span>
             <input type="file" accept="image/*" id="photo-input" style="position:absolute; top:0; left:0; width:100%; height:100%; opacity:0; z-index:10; cursor:pointer;" />
           </label>
+
+          <div style="display:flex; align-items:center; gap:8px; margin: 16px 0; color:var(--text-tertiary);">
+            <div style="flex:1; height:1px; background:rgba(255,255,255,0.08);"></div>
+            <span style="font-size:11px; text-transform:uppercase; font-weight:800; letter-spacing:0.5px;">o por Texto IA</span>
+            <div style="flex:1; height:1px; background:rgba(255,255,255,0.08);"></div>
+          </div>
+          
+          <div style="text-align:left; margin-bottom:12px;">
+            <label class="input-label" style="font-size:12px; color:var(--text-secondary);">¿Qué comiste? (Descríbelo en una frase)</label>
+            <textarea class="input" id="photo-text-input" placeholder="Ej: Me comí un croissant de jamón y queso de Starbucks y una Coca Cola Zero..." style="width:100%; height:72px; padding:10px 12px; font-size:14px; border-radius:14px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); color:white; resize:none;"></textarea>
+          </div>
+          <button class="btn btn-ghost btn-full" id="photo-text-submit" style="font-weight:700; border-radius:14px; border:1px solid rgba(0,206,201,0.25); color:var(--accent); background:rgba(0,206,201,0.03); height:40px; display:flex; align-items:center; justify-content:center; gap:6px;">
+            ✍️ Estimar con Texto IA
+          </button>
+          
           <div id="photo-preview" style="margin-top:var(--space-md)"></div>
         `}
       </div>
@@ -1203,6 +1218,72 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
 
     content.querySelector('#go-profile')?.addEventListener('click', () => navigateTo('profile'));
     content.querySelector('#photo-input')?.addEventListener('change', handlePhotoCapture);
+    
+    content.querySelector('#photo-text-submit')?.addEventListener('click', async () => {
+      const textInput = content.querySelector('#photo-text-input');
+      const textValue = textInput ? textInput.value.trim() : '';
+      if (!textValue) {
+        showToast('Describe qué comiste primero', 'warning');
+        return;
+      }
+
+      const preview = content.querySelector('#photo-preview');
+      if (preview) {
+        preview.innerHTML = `
+          <div class="ai-loading" style="text-align:center;padding:20px;">
+            <div class="ai-loading-spinner" style="width:36px;height:36px;margin:0 auto 12px;"></div>
+            <div class="ai-loading-text" style="font-weight:800;color:white;font-size:15px;">Analizando tu descripción con IA...</div>
+            <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;">Estamos calculando las porciones y macros ⏳</div>
+          </div>
+        `;
+      }
+
+      try {
+        const result = await analyzeTextWithAI(textValue);
+        if (result && result.foods && result.foods.length > 0) {
+          // Auto-guess meal slot if not provided
+          let targetSlotId = mealSlotId;
+          if (!targetSlotId) {
+            const hour = new Date().getHours();
+            if (hour < 11) targetSlotId = 'desayuno';
+            else if (hour < 15) targetSlotId = 'almuerzo';
+            else if (hour < 19) targetSlotId = 'colacion_pm';
+            else if (hour < 22) targetSlotId = 'cena';
+            else targetSlotId = 'colacion_nocturna';
+          }
+
+          const groupId = 'grp_' + Date.now();
+          const groupName = result.dish_name || 'Plato Combinado IA';
+          result.foods.forEach((f, idx) => {
+            const entry = {
+              name: f.name,
+              calories: (f.calories_per_100g || 0) * (f.estimated_grams || 100) / 100,
+              protein: (f.protein_per_100g || 0) * (f.estimated_grams || 100) / 100,
+              carbs: (f.carbs_per_100g || 0) * (f.estimated_grams || 100) / 100,
+              fat: (f.fat_per_100g || 0) * (f.estimated_grams || 100) / 100,
+              source: 'text_ai',
+              aiConfidence: result.confidence || 'medium',
+              servingSize: f.estimated_grams || 0,
+              servingUnit: 'g',
+              mealSlotId: targetSlotId,
+              groupId: groupId,
+              groupName: groupName
+            };
+            storage.addEntry(entry);
+          });
+
+          const summaryNames = result.foods.map(f => f.name).join(', ');
+          showToast('✓ Registrado por texto: ' + summaryNames, 'success');
+          navigateTo('dashboard', { selectedDate });
+        } else {
+          showToast('No pudimos comprender el texto', 'error');
+          if (preview) preview.innerHTML = '';
+        }
+      } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+        if (preview) preview.innerHTML = '';
+      }
+    });
   }
 
   async function handlePhotoCapture(e) {
@@ -1352,6 +1433,59 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
     }
   }
 
+  async function analyzeTextWithAI(descriptionText) {
+    const keyInfo = storage.getActiveApiKeyInfo();
+    const provider = keyInfo ? keyInfo.provider : 'gemini';
+    const apiKey = keyInfo ? keyInfo.key : '';
+    const hasAiAccess = storage.hasActiveAiAccess();
+
+    if (!hasAiAccess) throw new Error('Por favor configura tu API Key en el Perfil');
+    if (!descriptionText.trim()) throw new Error('Por favor escribe qué comiste.');
+
+    const prompt = `Actúa como un nutricionista experto y científico de alta precisión. El usuario te describe verbalmente lo que comió.
+Tu tarea es analizar el texto, identificar cada uno de los alimentos individuales en la descripción, estimar la porción realista consumida en gramos (g) considerando el contexto comercial o casero, y calcular las calorías y macronutrientes correspondientes.
+
+Descripción del usuario: "${descriptionText}"
+
+Pautas para estimar:
+1. Si menciona marcas o cadenas (ej. "Starbucks", "McDonalds", "Burger King", etc.), usa la información nutricional real de sus productos oficiales si la tienes disponible en tu conocimiento, o haz una estimación altamente precisa y realista de ese producto comercial específico (ej. un croissant con jamón y queso de Starbucks pesa tínicamente entre 110g y 140g, aportando unas 320-400 kcal con alto contenido graso y de carbohidratos).
+2. Si describe porciones caseras (ej. "un plato de arroz con pollo", "dos huevos", "un vaso de leche"), estima raciones estándares realistas del mundo real (ej. 2 huevos medianos = 100g, 1 plato de arroz cocido generoso = 250g-300g, 1 taza/vaso de leche = 200ml-250ml).
+3. Genera un título descriptivo y gourmet en español para todo el plato combinado en la propiedad "dish_name" (ej. "Croissant con Jamón y Queso y Café con Leche", "Arroz con Pollo Casero").
+
+Responde ÚNICAMENTE con un JSON válido que siga este formato exacto (sin bloques de código markdown, sin texto adicional, solo el JSON puro):
+{
+  "dish_name": "Nombre descriptivo y gourmet del plato en español",
+  "foods": [
+    {
+      "name": "Nombre del ingrediente/alimento individual en español",
+      "estimated_grams": 0,
+      "calories_per_100g": 0,
+      "protein_per_100g": 0,
+      "carbs_per_100g": 0,
+      "fat_per_100g": 0
+    }
+  ],
+  "confidence": "high|medium|low"
+}`;
+
+    const { response: res, data } = await fetchJsonSafe('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, apiKey, prompt })
+    });
+    if (!res.ok) {
+      const errMsg = (data.error || '').toLowerCase();
+      if (errMsg.includes('quota') || errMsg.includes('rate_limit') || errMsg.includes('resource_exhausted') || errMsg.includes('429')) {
+        throw new Error('⚠️ Quota de API agotada. Tu API Key excedió el límite gratuito. Espera unos minutos o revisa tu plan.');
+      }
+      throw new Error(data.error || 'Error al procesar el texto.');
+    }
+
+    let text = data.text || '';
+    text = text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+    return JSON.parse(text);
+  }
+
   async function analyzeImageWithAI(base64Image, isSupplement = false, mimeType = 'image/jpeg') {
     const keyInfo = storage.getActiveApiKeyInfo();
     const provider = keyInfo ? keyInfo.provider : 'gemini';
@@ -1374,14 +1508,14 @@ Responde ÚNICAMENTE con JSON válido con esta estructura:
 Sigue rigurosamente estas pautas para estimar el peso real con máxima precisión y evitar la subestimación sistemática:
 
 1. ANÁLISIS DE VOLUMEN 3D Y DENSIDAD:
-   - Identifica el tamaño del plato/recipiente. Un plato de comida normal mide de 24 a 28 cm de diámetro.
+   - Evalúa la escala buscando referencias de escala en la foto (como cubiertos, servilletas, vasos, la textura de la mesa, manos o proporciones generales) para estimar el tamaño del plato o envase. No asumas un tamaño único rígido de plato; deduce su escala real dinámicamente.
    - Observa la altura del montículo, las sombras y la superposición de los alimentos para entender el volumen tridimensional real.
    - Evita la subestimación en carbohidratos densos como el arroz, pasta, papas, granos, carnes y legumbres. Estos alimentos son muy densos (peso específico de 0.8-0.9 g/cm³) y acumulan mucho peso en poco espacio visible desde arriba.
    - CALIBRACIÓN FÍSICA CLAVE: 
-     * Si ves arroz cocido que ocupa una porción generosa del plato (ej. 1/3 o la mitad del plato) con cierta elevación o altura, pesa por lo menos entre 250g y 350g. Nunca estimes 150g para un plato lleno o montaña visible de arroz.
-     * Si ves pasta cocida servida como plato principal, estima entre 200g y 350g reales.
+     * Si ves arroz cocido que ocupa una porción generosa del recipiente (ej. la mitad de una porción promedio de comida) con cierta elevación o altura, pesa por lo menos entre 200g y 350g reales. Corrige el sesgo de perspectiva 2D escalando hacia arriba las estimaciones de densidades para estos carbohidratos apilados.
+     * Si ves pasta cocida servida como plato principal o porción generosa, estima entre 200g y 350g reales.
      * Una porción de carne, pollo o pescado del tamaño de la palma de la mano con grosor estándar pesa entre 120g y 180g. Si es más gruesa o grande, sube a 200g-250g.
-     * Si el plato se ve abundante y lleno, la suma total de los alimentos debe rondar entre los 300g y 600g. ¡No subestimes!
+     * Si el plato/recipiente se ve abundante y lleno, la suma total de los alimentos debe rondar entre los 300g y 600g. ¡No subestimes!
 
 2. ASIGNACIÓN DE TÍTULO CREATIVO AL PLATO (dish_name):
    - Genera un nombre descriptivo, gourmet y apetitoso en español para todo el plato combinado (ej. "Arroz con Pollo a la Plancha y Ensalada Mixta", "Spaghetti Bolognesa", "Bowl de Salmón con Quinoa", etc.). No uses nombres genéricos como "Plato Combinado". Debe ser específico de lo que detectas.
