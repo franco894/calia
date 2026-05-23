@@ -47,6 +47,7 @@ class CaliaApp {
     if (!auth.isLoggedIn()) {
       this.showLogin();
     } else {
+      await auth.syncLocalDataToCloud(auth.getCurrentUserId());
       storage.initUserDefaults();
       await storage.syncServerManagedAiProfile();
       const settings = storage.getSettings();
@@ -60,6 +61,7 @@ class CaliaApp {
     renderLogin(this.pageContainer, {
       onLogin: async () => {
         document.getElementById('bottom-nav').style.display = 'flex';
+        await auth.syncLocalDataToCloud(auth.getCurrentUserId());
         await storage.syncServerManagedAiProfile();
         const settings = storage.getSettings();
         document.body.classList.toggle('light-theme', settings.lightTheme !== false);

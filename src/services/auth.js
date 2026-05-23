@@ -241,6 +241,85 @@ class AuthService {
       console.error('[Migration] Critical error migrating accounts:', err);
     }
   }
+
+  /** Bidirectional background sync between localStorage and Turso cloud database */
+  async syncLocalDataToCloud(userId) {
+    if (!userId) return;
+    try {
+      console.log(`[Sync] Starting sync for user: ${userId}`);
+      // 1. Pull current cloud data
+      const res = await fetch(`/api/sync/pull?userId=${encodeURIComponent(userId)}`);
+      const payload = await res.json();
+      const cloudData = (payload.success && payload.data) ? payload.data : {};
+
+      // 2. Scan all localStorage keys for this user
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        const prefix = `calia_${userId}_`;
+        if (key && key.startsWith(prefix)) {
+          const dataKey = key.substring(prefix.length);
+          const localValue = localStorage.getItem(key);
+          const cloudValue = cloudData[dataKey];
+
+          let shouldPush = false;
+          if (cloudValue === undefined || cloudValue === null) {
+            shouldPush = true;
+          } else {
+            // Smart conflict resolution
+            if (dataKey === 'food_entries') {
+              try {
+                const localEntries = JSON.parse(localValue || '[]');
+                const cloudEntries = JSON.parse(cloudValue || '[]');
+                if (localEntries.length > cloudEntries.length) {
+                  shouldPush = true;
+                }
+              } catch (e) {}
+            } else if (dataKey === 'meal_slots' || dataKey === 'day_configs' || dataKey === 'supplements') {
+              if (localValue !== cloudValue) {
+                shouldPush = true;
+              }
+            } else if (localValue !== cloudValue) {
+              shouldPush = true;
+            }
+          }
+
+          if (shouldPush) {
+            console.log(`[Sync] Pushing key "${dataKey}" to cloud for user "${userId}"`);
+            await fetch('/api/sync/push', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId, key: dataKey, value: localValue })
+            });
+          }
+        }
+      }
+
+      // 3. Pull any cloud keys that we don't have locally
+      if (payload.success && payload.data) {
+        Object.keys(payload.data).forEach(key => {
+          const storageKey = `calia_${userId}_${key}`;
+          const localVal = localStorage.getItem(storageKey);
+          if (localVal === null || localVal === undefined) {
+            console.log(`[Sync] Pulling key "${key}" from cloud to local storage`);
+            localStorage.setItem(storageKey, payload.data[key]);
+          } else {
+            // Overwrite if local is empty/default but cloud has data
+            if (key === 'food_entries') {
+              try {
+                const localEntries = JSON.parse(localVal || '[]');
+                const cloudEntries = JSON.parse(payload.data[key] || '[]');
+                if (cloudEntries.length > localEntries.length) {
+                  localStorage.setItem(storageKey, payload.data[key]);
+                }
+              } catch (e) {}
+            }
+          }
+        });
+      }
+    } catch (e) {
+      console.error('[Sync] Error in bidirectional sync:', e);
+    }
+  }
 }
 
 export const auth = new AuthService();

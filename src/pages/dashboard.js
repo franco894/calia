@@ -6,6 +6,7 @@ import { showFoodConfirmModal } from '../components/food-confirm-modal.js';
 import { auth } from '../services/auth.js';
 import { openPlanSlotRecommenderModal } from '../components/plan-slot-recommender-modal.js';
 import { openWaterPhotoModal } from '../components/water-photo-modal.js';
+import { openCalculatorModal } from '../components/calculator-modal.js';
 import { today, formatDate, showToast, bindZoomableImages, prepareImageUpload, toFriendlyImageError } from '../utils/helpers.js';
 
 export function renderDashboard(container, { navigateTo, selectedDate }) {
@@ -602,4 +603,72 @@ export function renderDashboard(container, { navigateTo, selectedDate }) {
       onSave: () => renderDashboard(container, { navigateTo, selectedDate: dateStr })
     });
   });
+
+  // Trigger initial plan setup modal if not configured
+  const userId = auth.getCurrentUserId();
+  if (userId && !localStorage.getItem(`calia_${userId}_plan_configured`)) {
+    setTimeout(() => {
+      openInitialSetupModal(container, navigateTo, dateStr);
+    }, 400);
+  }
+}
+
+function openInitialSetupModal(container, navigateTo, dateStr) {
+  const userId = auth.getCurrentUserId();
+  const wrapper = document.createElement('div');
+  wrapper.id = 'setup-choice-modal-wrapper';
+  wrapper.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.85);backdrop-filter:blur(16px);padding:16px;animation:fadeIn 0.3s ease;';
+
+  wrapper.innerHTML = `
+    <div class="card-glass" style="max-width:440px;width:100%;padding:32px;border-radius:32px;border:1px solid rgba(0,206,201,0.3);box-shadow:0 30px 60px rgba(0,0,0,0.6);animation:scaleUp 0.3s ease;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">🎯</div>
+      <h2 style="font-size:22px;font-weight:900;margin:0 0 8px 0;color:white;line-height:1.2;">¡Te damos la bienvenida a Cal-IA!</h2>
+      <p style="font-size:14px;color:var(--text-secondary);margin-bottom:24px;line-height:1.4;">Para comenzar a registrar tus alimentos, primero seleccionemos la base de tu plan nutricional:</p>
+
+      <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:24px;">
+        <!-- Option 1: Scientific Periodized Calculator -->
+        <button id="setup-choose-calc" class="card-glass" style="cursor:pointer;padding:16px;border-radius:20px;border:2px solid var(--accent);background:rgba(0,206,201,0.06);display:flex;align-items:center;gap:16px;text-align:left;width:100%;transition:all 0.2s;box-shadow:var(--shadow-accent-glow);width:100%;">
+          <span style="font-size:28px;">📊</span>
+          <div style="flex:1;">
+            <div style="font-weight:800;font-size:15px;color:white;">Plan Científico y Periodizado</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;line-height:1.3;">Calcula tus calorías y periodiza tus macros de forma científica basada en tus entrenamientos y partidos.</div>
+          </div>
+        </button>
+
+        <!-- Option 2: Standard Plan -->
+        <button id="setup-choose-std" class="card-glass" style="cursor:pointer;padding:16px;border-radius:20px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.02);display:flex;align-items:center;gap:16px;text-align:left;width:100%;transition:all 0.2s;width:100%;">
+          <span style="font-size:28px;">⚙️</span>
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:15px;color:white;">Plan Estándar (2000 kcal)</div>
+            <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px;line-height:1.3;">Empieza con una base equilibrada estándar diaria y configúrala de forma manual a tu gusto.</div>
+          </div>
+        </button>
+      </div>
+
+      <div style="font-size:12px;color:var(--text-tertiary);line-height:1.4;background:rgba(255,255,255,0.03);padding:10px 14px;border-radius:14px;border:1px solid rgba(255,255,255,0.05);">
+        💡 <b>Nota:</b> Elijas lo que elijas, siempre puedes volver a calcular tu plan o modificar tus macros manualmente en tu <b>Perfil</b>.
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(wrapper);
+
+  wrapper.querySelector('#setup-choose-calc').addEventListener('click', () => {
+    wrapper.remove();
+    localStorage.setItem(`calia_${userId}_plan_configured`, 'true');
+    openCalculatorModal({
+      onSave: () => {
+        showToast('✨ Plan Científico Periodizado configurado con éxito', 'success');
+        renderDashboard(container, { navigateTo, selectedDate: dateStr });
+      }
+    });
+  });
+
+  wrapper.querySelector('#setup-choose-std').addEventListener('click', () => {
+    wrapper.remove();
+    localStorage.setItem(`calia_${userId}_plan_configured`, 'true');
+    showToast('⚙️ Plan General Estándar cargado', 'info');
+    renderDashboard(container, { navigateTo, selectedDate: dateStr });
+  });
+}
 }

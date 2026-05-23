@@ -420,6 +420,7 @@ export async function seedFrancoAccount() {
     const result = await auth.register('franco', 'Franco', 'calia2026');
     if (result.ok) {
       storage.seedFrancoData();
+      localStorage.setItem('calia_franco_plan_configured', 'true');
       auth.logout();
     }
   } catch (err) {
