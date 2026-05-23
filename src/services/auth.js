@@ -186,9 +186,6 @@ class AuthService {
       let allSuccessful = true;
 
       for (const username of usernames) {
-        // Skip default local-only seeding of franco as it is handled by the database seeding now
-        if (username === 'franco') continue;
-
         const user = legacyUsers[username];
         try {
           // Register account on Turso using existing password hash
