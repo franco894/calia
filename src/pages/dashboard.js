@@ -635,12 +635,12 @@ function openInitialSetupModal(container, navigateTo, dateStr) {
           </div>
         </button>
 
-        <!-- Option 2: Standard Plan -->
+        <!-- Option 2: Custom Manual Values -->
         <button id="setup-choose-std" class="card-glass" style="cursor:pointer;padding:16px;border-radius:20px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.02);display:flex;align-items:center;gap:16px;text-align:left;width:100%;transition:all 0.2s;width:100%;">
-          <span style="font-size:28px;">⚙️</span>
+          <span style="font-size:28px;">✏️</span>
           <div style="flex:1;">
-            <div style="font-weight:700;font-size:15px;color:white;">Plan Estándar (2000 kcal)</div>
-            <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px;line-height:1.3;">Empieza con una base equilibrada estándar diaria y configúrala de forma manual a tu gusto.</div>
+            <div style="font-weight:700;font-size:15px;color:white;">Personalizar Manualmente</div>
+            <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px;line-height:1.3;">Define tú mismo tus objetivos de calorías, agua y macronutrientes de forma manual.</div>
           </div>
         </button>
       </div>
@@ -665,9 +665,95 @@ function openInitialSetupModal(container, navigateTo, dateStr) {
   });
 
   wrapper.querySelector('#setup-choose-std').addEventListener('click', () => {
-    wrapper.remove();
-    localStorage.setItem(`calia_${userId}_plan_configured`, 'true');
-    showToast('⚙️ Plan General Estándar cargado', 'info');
-    renderDashboard(container, { navigateTo, selectedDate: dateStr });
+    // Transition to Manual Inputs form inside the same modal card!
+    wrapper.querySelector('.card-glass').innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+        <div style="font-size:28px;">⚙️</div>
+        <div style="text-align:left;">
+          <h2 style="font-size:20px;font-weight:900;margin:0;color:white;line-height:1.2;">Metas Manuales</h2>
+          <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px;">Define tus propios objetivos de macros</div>
+        </div>
+      </div>
+
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;text-align:left;">Ingresa tus calorías objetivo y el reparto diario de macronutrientes que desees:</p>
+
+      <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:24px;text-align:left;">
+        <div class="input-group">
+          <label class="input-label" style="color:var(--text-secondary);font-size:12px;margin-bottom:4px;display:block;">Calorías Objetivo (kcal)</label>
+          <input class="input" type="number" id="manual-kcal" value="2000" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);font-size:16px;padding:10px 14px;border-radius:14px;color:white;width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+          <div class="input-group">
+            <label class="input-label" style="color:var(--text-secondary);font-size:11px;margin-bottom:4px;display:block;">Proteína (g)</label>
+            <input class="input" type="number" id="manual-prot" value="120" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);font-size:16px;padding:10px 8px;border-radius:14px;color:white;width:100%;box-sizing:border-box;" />
+          </div>
+          <div class="input-group">
+            <label class="input-label" style="color:var(--text-secondary);font-size:11px;margin-bottom:4px;display:block;">Carbs (g)</label>
+            <input class="input" type="number" id="manual-carbs" value="230" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);font-size:16px;padding:10px 8px;border-radius:14px;color:white;width:100%;box-sizing:border-box;" />
+          </div>
+          <div class="input-group">
+            <label class="input-label" style="color:var(--text-secondary);font-size:11px;margin-bottom:4px;display:block;">Grasa (g)</label>
+            <input class="input" type="number" id="manual-fat" value="65" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);font-size:16px;padding:10px 8px;border-radius:14px;color:white;width:100%;box-sizing:border-box;" />
+          </div>
+        </div>
+        <div class="input-group">
+          <label class="input-label" style="color:var(--text-secondary);font-size:12px;margin-bottom:4px;display:block;">Agua Objetivo (ml)</label>
+          <input class="input" type="number" id="manual-water" value="2500" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);font-size:16px;padding:10px 14px;border-radius:14px;color:white;width:100%;box-sizing:border-box;" />
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-ghost" id="manual-back" style="flex:0.4;border-radius:14px;padding:12px;">Atrás</button>
+        <button class="btn btn-accent" id="manual-save" style="flex:1;border-radius:14px;padding:12px;font-weight:800;">Guardar Metas</button>
+      </div>
+    `;
+
+    // Bind back button
+    wrapper.querySelector('#manual-back').addEventListener('click', () => {
+      wrapper.remove();
+      openInitialSetupModal(container, navigateTo, dateStr);
+    });
+
+    // Bind save button
+    wrapper.querySelector('#manual-save').addEventListener('click', () => {
+      const kcal = parseInt(wrapper.querySelector('#manual-kcal').value) || 2000;
+      const prot = parseInt(wrapper.querySelector('#manual-prot').value) || 120;
+      const carbs = parseInt(wrapper.querySelector('#manual-carbs').value) || 230;
+      const fat = parseInt(wrapper.querySelector('#manual-fat').value) || 65;
+      const water = parseInt(wrapper.querySelector('#manual-water').value) || 2500;
+
+      // Save Goals
+      storage.setGoals({ calories: kcal, protein: prot, carbs: carbs, fat: fat, fiber: 30, water: water });
+
+      // Build corresponding standard daily config
+      const customDayConfigs = [
+        {
+          id: 'manual',
+          name: 'Manual',
+          days: [0, 1, 2, 3, 4, 5, 6],
+          calories: kcal,
+          protein: prot,
+          fat: fat,
+          carbs: carbs,
+        }
+      ];
+      storage.setDayConfigs(customDayConfigs);
+
+      // Rebuild Meal Slots
+      const customMealSlots = {
+        'manual': [
+          { id: 'manual_des', name: 'Desayuno', time: '08:00', calories: Math.round(kcal * 0.25), protein: Math.round(prot * 0.25), fat: Math.round(fat * 0.25), carbs: Math.round(carbs * 0.25), icon: '🌅' },
+          { id: 'manual_alm', name: 'Almuerzo', time: '13:00', calories: Math.round(kcal * 0.35), protein: Math.round(prot * 0.35), fat: Math.round(fat * 0.35), carbs: Math.round(carbs * 0.35), icon: '☀️' },
+          { id: 'manual_col', name: 'Colación', time: '16:30', calories: Math.round(kcal * 0.15), protein: Math.round(prot * 0.15), fat: Math.round(fat * 0.15), carbs: Math.round(carbs * 0.15), icon: '🍎' },
+          { id: 'manual_cen', name: 'Cena', time: '20:30', calories: Math.round(kcal * 0.25), protein: Math.round(prot * 0.25), fat: Math.round(fat * 0.25), carbs: Math.round(carbs * 0.25), icon: '🌙' },
+        ]
+      };
+      storage.setMealSlots(customMealSlots);
+
+      wrapper.remove();
+      localStorage.setItem(`calia_${userId}_plan_configured`, 'true');
+      showToast('⚙️ Metas personalizadas de forma manual con éxito', 'success');
+      renderDashboard(container, { navigateTo, selectedDate: dateStr });
+    });
   });
 }
